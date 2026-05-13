@@ -143,10 +143,28 @@ def hud_off_scorer(sample_dir: Path) -> Scorer:
 
 
 @task
-def hud_off() -> Task:
-    """Single-Sample HUD-removal task (Nightfire reference instance)."""
+def hud_off(iso: str = "", savestate: str = "") -> Task:
+    """Single-Sample HUD-removal task (Nightfire reference instance).
+
+    Args:
+        iso: Path to the game ISO. Overrides the SPECTRE_NIGHTFIRE_ISO env var.
+        savestate: Path to the Dolphin savestate. Overrides SPECTRE_NIGHTFIRE_SAV.
+
+    CLI usage::
+
+        inspect eval src/agent/task.py -T iso=roms/nightfire.iso -T savestate=roms/GO7E69.s01
+    """
+    import os
+
     sample_dir = SAMPLES_DIR / DEFAULT_SAMPLE
     cfg = load_sample_config(sample_dir)
+
+    # CLI -T overrides take precedence over env vars
+    if iso:
+        os.environ[cfg.iso_env] = iso
+    if savestate:
+        os.environ[cfg.savestate_env] = savestate
+
     iso_path, _ = resolve_runtime_paths(cfg)
     extract_root = _extract_root_for(iso_path)
     extract_root.mkdir(parents=True, exist_ok=True)

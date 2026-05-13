@@ -46,6 +46,10 @@ roms/
 
 # Inspect AI eval logs
 runs/
+logs/
+
+# direnv
+.direnv/
 
 # Per-sample derived artifacts (extracted from the ROM at build time)
 samples/*/boot.dol

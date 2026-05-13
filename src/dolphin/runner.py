@@ -1,12 +1,8 @@
-"""Native macOS Dolphin runner — boot headless, dump frames.
+"""Cross-platform Dolphin runner — boot headless, dump frames.
 
-This is the local dev path. The verifier container (Linux) lives under
-`docker/` and is invoked by the Inspect AI sandbox in later phases.
-
-The runner spawns Dolphin with an isolated `--user` dir so test runs never
-pollute the developer's real Dolphin profile. On macOS the launcher uses
-`open -gjn -W` to keep the cocoa window invisible while still emitting
-software-rendered frames to the dump dir.
+Supports macOS (cocoa app via `open -gjn -W`) and Linux (`dolphin-emu-nogui
+--platform=headless`). The runner spawns Dolphin with an isolated `--user`
+dir so test runs never pollute the developer's real Dolphin profile.
 
 Pure-ish: filesystem side effects in a caller-supplied directory, plus
 process spawn. No globals, no logging — caller handles UX.
@@ -26,8 +22,18 @@ from typing import Literal
 
 from src.dolphin.gecko import GeckoCode, render_gecko_ini
 
-DOLPHIN_BIN = Path("/Applications/Dolphin.app/Contents/MacOS/Dolphin")
+# --- Platform detection -------------------------------------------------- #
+
+_IS_MACOS = sys.platform == "darwin"
+_IS_LINUX = sys.platform == "linux"
+
+# macOS paths
 DOLPHIN_APP = Path("/Applications/Dolphin.app")
+DOLPHIN_MAC_BIN = DOLPHIN_APP / "Contents" / "MacOS" / "Dolphin"
+
+# Linux: prefer dolphin-emu-nogui (true headless), fall back to dolphin-emu
+DOLPHIN_LINUX_NOGUI = "dolphin-emu-nogui"
+DOLPHIN_LINUX_GUI = "dolphin-emu"
 
 VideoBackend = Literal["Software", "OGL", "Metal", "Vulkan", "Null"]
 
@@ -45,6 +51,8 @@ SyncOnSkipIdle = True
 
 [DSP]
 Backend = Null
+EnableJIT = False
+Volume = 0
 
 [Display]
 Fullscreen = False
@@ -53,6 +61,7 @@ RenderToMain = False
 [Movie]
 DumpFrames = True
 DumpFramesSilent = True
+DumpFramesAsImages = True
 """
 
 DEFAULT_GFX_INI = """[Hardware]
@@ -63,7 +72,20 @@ ShowFPS = False
 LogRenderTimeToFile = False
 AspectRatio = 0
 Crop = False
+DumpFramesAsImages = True
 """
+
+
+def _find_linux_dolphin() -> str:
+    """Return the name of the best available Dolphin binary on Linux."""
+    if shutil.which(DOLPHIN_LINUX_NOGUI):
+        return DOLPHIN_LINUX_NOGUI
+    if shutil.which(DOLPHIN_LINUX_GUI):
+        return DOLPHIN_LINUX_GUI
+    raise FileNotFoundError(
+        f"Neither {DOLPHIN_LINUX_NOGUI} nor {DOLPHIN_LINUX_GUI} found in PATH. "
+        "Install Dolphin (e.g. `nix develop` in the spectre directory)."
+    )
 
 
 @dataclass(frozen=True)
@@ -96,6 +118,60 @@ def write_user_dir(user_dir: Path, game_id: str, gecko_codes: list[GeckoCode]) -
         (user_dir / "GameSettings" / f"{game_id}.ini").write_text(ini_text)
 
 
+def _build_command(
+    user_dir: Path,
+    iso: Path,
+    *,
+    savestate: Path | None,
+    video_backend: VideoBackend,
+    hidden: bool,
+) -> tuple[list[str], bool]:
+    """Build the Dolphin command line for the current platform.
+
+    Returns (args, uses_open_wrapper) — the bool indicates whether macOS
+    `open -W` was used, which affects signal propagation in _terminate.
+    """
+    if _IS_MACOS:
+        # macOS GUI binary uses long flags
+        dolphin_args = [
+            "--batch",
+            f"--user={user_dir}",
+            f"--video_backend={video_backend}",
+            "--audio_emulation=HLE",
+            f"--exec={iso}",
+        ]
+        if savestate is not None:
+            dolphin_args.append(f"--save_state={savestate}")
+
+        if hidden:
+            # `open -gjn -W` launches a fresh hidden cocoa instance and blocks
+            # until it exits. Window exists but never visible; software renderer
+            # still writes frames to the dump dir.
+            return (
+                ["open", "-gjn", "-W", "-a", str(DOLPHIN_APP), "--args", *dolphin_args],
+                True,
+            )
+        return ([str(DOLPHIN_MAC_BIN), *dolphin_args], False)
+
+    if _IS_LINUX:
+        dolphin_bin = _find_linux_dolphin()
+        # dolphin-emu-nogui uses short flags and has no --batch
+        dolphin_args = [
+            f"-u{user_dir}",
+            f"-v{video_backend}",
+            f"-e{iso}",
+            "-CMovie.DumpFramesAsImages=True",
+        ]
+        if savestate is not None:
+            dolphin_args.append(f"-s{savestate}")
+        if dolphin_bin == DOLPHIN_LINUX_NOGUI:
+            # True headless — no X server needed
+            dolphin_args.insert(0, "-pheadless")
+        return ([dolphin_bin, *dolphin_args], False)
+
+    raise RuntimeError(f"Unsupported platform: {sys.platform}")
+
+
 def run_dolphin(
     user_dir: Path,
     iso: Path,
@@ -111,26 +187,16 @@ def run_dolphin(
     Caller is responsible for pre-populating `user_dir` (Gecko INI, etc.) via
     `write_user_dir`. `log_path` receives Dolphin's combined stdout/stderr.
     """
-    dolphin_args = [
-        "--batch",
-        f"--user={user_dir}",
-        f"--video_backend={video_backend}",
-        "--audio_emulation=HLE",
-        f"--exec={iso}",
-    ]
-    if savestate is not None:
-        dolphin_args.append(f"--save_state={savestate}")
+    args, uses_open_wrapper = _build_command(
+        user_dir,
+        iso,
+        savestate=savestate,
+        video_backend=video_backend,
+        hidden=hidden,
+    )
 
     env = os.environ.copy()
     env.setdefault("LC_ALL", "en_US.UTF-8")
-
-    if hidden:
-        # `open -gjn -W` launches a fresh hidden Dolphin instance and blocks until
-        # it exits. Window exists but never visible; software renderer still
-        # writes frames to the dump dir.
-        args = ["open", "-gjn", "-W", "-a", str(DOLPHIN_APP), "--args", *dolphin_args]
-    else:
-        args = [str(DOLPHIN_BIN), *dolphin_args]
 
     t0 = time.time()
     with log_path.open("wb") as logf:
@@ -138,7 +204,7 @@ def run_dolphin(
         try:
             proc.wait(timeout=run_seconds)
         except subprocess.TimeoutExpired:
-            _terminate(proc, hidden=hidden)
+            _terminate(proc, uses_open_wrapper=uses_open_wrapper)
     elapsed = time.time() - t0
 
     return RunResult(
@@ -149,13 +215,14 @@ def run_dolphin(
     )
 
 
-def _terminate(proc: subprocess.Popen[bytes], *, hidden: bool) -> None:
+def _terminate(proc: subprocess.Popen[bytes], *, uses_open_wrapper: bool) -> None:
     """Stop Dolphin cleanly; escalate to SIGKILL if it ignores SIGTERM.
 
-    `open -W` does not propagate signals to the launched cocoa app, so when
-    launched hidden we kill by binary name instead of via the wrapper PID.
+    macOS `open -W` does not propagate signals to the launched cocoa app,
+    so when launched via the wrapper we kill by binary name instead.
+    On Linux we signal the process directly.
     """
-    if hidden:
+    if uses_open_wrapper:
         subprocess.run(
             ["pkill", "-TERM", "-f", "Dolphin.app/Contents/MacOS/Dolphin"],
             check=False,
