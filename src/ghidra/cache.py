@@ -4,7 +4,7 @@
 decompiled pseudocode. This module is the pure-stdlib read layer used by
 agent tools.
 
-File map (under `<sample_dir>/analysis/`):
+File map (under `cache/binaries/<sha1>/`):
 
 - `functions.json`       — [{addr, name, size}, ...]
 - `callgraph.json`       — {addr: {callees: [{addr, name}], callers: [addr]}}
@@ -195,6 +195,23 @@ def callers_of(cache_dir: Path, addr: str) -> list[CallEdge]:
         return []
     index = {e.addr: e.name for e in load_function_index(cache_dir)}
     return [CallEdge(addr=str(a).lower(), name=index.get(str(a).lower(), "<unknown>")) for a in raw_addrs]
+
+
+def find_orphan_roots(cache_dir: Path, *, limit: int = 20) -> list[FunctionEntry]:
+    """Functions with zero in-callgraph callers, sorted by size descending.
+
+    Ghidra's `ExternalEntryPointIterator` only flags symbol-marked entries —
+    typically just `e_entry` on a stripped ELF. Orphan roots fill the gap:
+    they're functions that no other function in the binary calls, which
+    usually means they're invoked via vtable / interrupt vector / dynamic
+    dispatch — or they're the actual program entry that was stripped.
+    Sorted by size so big roots (main loops, render dispatchers) come first.
+    """
+    funcs = load_function_index(cache_dir)
+    cg = load_callgraph(cache_dir)
+    roots = [f for f in funcs if not cg.get(f.addr, {}).get("callers")]
+    roots.sort(key=lambda f: f.size, reverse=True)
+    return roots[:limit]
 
 
 def search_strings(

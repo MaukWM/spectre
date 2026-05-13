@@ -32,6 +32,30 @@ analysis, plus one expensive tool for testing candidates:
 - `callers(addr_or_name)` — functions that call this one (xrefs to entry). \
   Walk *inward*.
 
+### Binary selection + multi-binary discovery (free)
+
+The task description includes an **inventory** of every executable \
+on the disc, each pre-analyzed under its SHA-1. No binary is \
+pre-selected; you **must** call `switch_binary(<sha1>)` once before \
+any static-analysis tool will return data. You can flip between \
+inventoried binaries freely.
+
+- `switch_binary(sha1)` — point the read tools at one of the \
+  inventoried binaries (or any binary you later `analyze_binary`). \
+  Static-analysis tools (`entry_points`, `find_function`, …) refuse \
+  to run until you've called this once.
+- `list_iso_contents()` — full FST listing of the disc image, \
+  including non-executable assets. The inventory is already a \
+  filtered view; reach for this only if you need to see other files \
+  (audio, movies, config) or hunt for binaries the survey missed.
+- `extract_iso(path_in_iso)` — copy a file out of the ISO to local \
+  disk. Returns its SHA-1 + on-disk path. Use when you spot a \
+  candidate in `list_iso_contents` that isn't in the inventory.
+- `analyze_binary(path)` — run Ghidra on a freshly-extracted file. \
+  Cached by SHA-1, so re-analysis is free. **After this call, the \
+  read tools target the newly-analyzed binary** until you \
+  `switch_binary` again.
+
 ### Persistent annotation (free)
 
 - `rename_function(addr_or_name, new_name)` — rename a function. The \
@@ -105,34 +129,62 @@ Look at the screenshot, not just the numbers. A black screen scores \
 means your patch broke rendering entirely. The numbers + the image \
 together tell the full story.
 
-## Suggested workflow
+## Suggested workflow — TOP-DOWN, NOT BOTTOM-UP
 
-Treat this like real RE work. Build up a mental model incrementally; \
-don't try to read the whole binary.
+Treat this like real RE work. Build up a mental model incrementally \
+from the program's true entry point down. Resist the urge to grep for \
+the answer; map the structure first.
 
-1. **Start at `entry_points()`** to see where execution begins.
-2. **Decompile the entry function.** Skim it. Most of it is bootstrap \
-   (memory init, OS setup). Find the call into the main game loop. \
-   Rename what you understand (`rename_function`) so future reads are \
-   easier.
-3. **`find_string`** for terms related to your task: `hud`, `health`, \
-   `ammo`, `draw`, `render`, `gui`, `overlay`. Each hit gives you \
-   functions that reference that string — often directly the relevant \
-   code path. This is usually the fastest way in.
-4. **Walk the call graph.** `callees(...)` to see what a function \
-   delegates to; `callers(...)` to see who invokes it. Rename + note \
-   liberally as you understand. Build a map.
-5. **Identify a candidate patch site.** Either:
+0. **Pick a binary from the inventory.** No binary is pre-selected. \
+   Look at the inventory table in the task description and call \
+   `switch_binary(<sha1>)` on the one most likely to hold the game \
+   logic. Big function count + sensible name = good candidate. Tiny \
+   DOL means it's a REL-based game; the real code lives in a `.rel` \
+   on the disc. If you pick wrong, just `switch_binary` again later.
+
+1. **Start at `entry_points()`.** The **marked entry** is the *true* \
+   program entry — that's your top of the tree. The **orphan roots** \
+   are NOT the entry; they're isolated functions reached via vtable / \
+   interrupt / dead code. Use orphans only as a fallback when top-down \
+   walking gets stuck — do not start from them.
+
+2. **Walk down from the marked entry** for 4–8 decompiles BEFORE you \
+   touch `find_string`. The goal: build a top-down map shaped like \
+   `entry → boot/init → main_loop → per_frame_dispatcher → render → \
+   HUD_dispatcher → individual_HUD_components`. Use `callees(addr)` \
+   to step *down* from a node. Rename + `add_note` aggressively so \
+   the tree stays readable as you descend.
+
+3. **THEN use `find_string`** for `hud`, `health`, `ammo`, `draw`, \
+   `render`, `gui`, `overlay` — but use it to **confirm** you're in \
+   the right region of the map, not to discover the region from \
+   scratch. Cross-check every string-xref against your top-down map: \
+   if a hit is in a function that isn't reachable from your render \
+   path (use `callers` to verify), it's noise (a logger, asset \
+   loader, save-game string, etc.) — skip it.
+
+4. **Pick a candidate patch site** from the render dispatcher's \
+   *direct callees*, not a deep leaf. The closer to the dispatcher, \
+   the more HUD elements you kill in one patch. Two patch shapes:
    - A `bl <target>` call you want to NOP — write `60000000` at the \
      `bl` instruction's address. Effect: the call is skipped.
    - A function entry you want to BLR — write `4E800020` at the \
      function's first instruction. Effect: the function returns \
      immediately on entry, doing nothing.
-6. **Submit via `run_gecko`.** Read the screenshot AND the numbers. If \
-   HUD still visible → the patched function wasn't the HUD path; back \
-   to the call graph. If rendering broke (black screen / hand vanished \
-   / weird visual artifacts) → your patch had side effects beyond \
-   drawing; revert and try a more leaf-like helper.
+
+5. **Submit via `run_gecko`.** Read the screenshot AND the numbers.
+
+**Anti-patterns to avoid:**
+
+- **Don't tunnel-vision a region.** If 2 consecutive `run_gecko` \
+  calls in the same address neighbourhood return `hud_mean < 2.0`, \
+  STOP iterating sibling functions there — you're in the wrong area \
+  entirely. Go back to step 2, walk further up the call graph from a \
+  different node, or step further *down* into a deeper dispatcher.
+- **Don't BLR a function just because `find_string` hit it.** Verify \
+  it's on the per-frame render path via `callers` first.
+- **Don't submit untested gecko.** Every code you submit MUST have \
+  been tested by `run_gecko` at least once in this session.
 
 When you reach a hypothesis worth investing in, leave a brief note \
 on the relevant function with `add_note` so your reasoning survives \
@@ -142,9 +194,15 @@ you, which keeps the binary readable as you go.
 
 ## Submission
 
-When `run_gecko` returns **PASS**, you're done — submit the exact \
-`gecko_text` you passed in as your final answer and stop. If you run \
-out of budget without a PASS, submit your best attempt anyway.
+When `run_gecko` returns **PASS**, submit the exact `gecko_text` you \
+passed in as your final answer and stop.
+
+If you exhaust your budget without a PASS, submit the **exact \
+gecko_text from your highest-`hud_mean` `run_gecko` attempt** — the \
+one that came closest to the threshold. Never submit code you didn't \
+test, never submit an address you guessed at the end. Your textual \
+final answer must be byte-for-byte one of the `gecko_text` strings \
+you already passed into `run_gecko` this session.
 """
 
 

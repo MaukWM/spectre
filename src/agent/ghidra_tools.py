@@ -1,6 +1,6 @@
 """Inspect AI tools backed by the Ghidra analysis cache.
 
-Tool roster (each is an `@tool` factory bound to a sample's analysis dir):
+Tool roster (each is a parameterless `@tool` factory):
 
 - `entry_points()`                     — where to start exploring
 - `find_function(pattern, limit)`      — regex over original + renamed names
@@ -11,21 +11,26 @@ Tool roster (each is an `@tool` factory bound to a sample's analysis dir):
 - `rename_function(addr_or_name, ...)` — persist a rename in the sidecar
 - `add_note(addr_or_name, text)`       — persist a free-text note in the sidecar
 
-All read tools cap their output to keep tool results manageable.
+Every tool reads the active binary's cache via `state.current_cache_dir`
+at call time. If the agent hasn't called `switch_binary(<sha1>)` yet,
+each tool returns the `NO_BINARY_SELECTED_MSG` to nudge the agent to
+pick from the inventory in the initial user message. All read tools
+cap their output to keep tool results manageable.
 """
 
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 from inspect_ai.tool import Tool, tool
 
+from src.agent.state import NO_BINARY_SELECTED_MSG, current_cache_dir
 from src.ghidra import NotesStore
 from src.ghidra.cache import (
     callees_of,
     callers_of,
     find_functions,
+    find_orphan_roots,
     load_entry_points,
     read_decompiled,
     resolve_function,
@@ -74,34 +79,79 @@ def _apply_renames_to_body(text: str, renames: dict[str, str]) -> str:
 
 
 @tool
-def entry_points(cache_dir: Path) -> Tool:
-    """Build the `entry_points` tool bound to a sample's analysis cache."""
+def entry_points() -> Tool:
+    """Build the `entry_points` tool."""
 
     async def execute() -> str:
-        """List the binary's entry points — start exploration here.
+        """List the active binary's entry points — start exploration here.
 
-        Returns:
-            A short table of `addr  name` rows. Typically includes the
-            main `_start`/program entry and any other addresses the
-            loader marked as externally callable.
+        Returns two sections:
+
+        1. **Marked entries** — addresses Ghidra's loader flagged as
+           external entry points (usually just `e_entry` on stripped
+           ELFs / the DOL bootstrap).
+        2. **Orphan roots** — functions with zero in-callgraph callers,
+           sorted by size descending. These are reached via vtable /
+           interrupt vector / dynamic dispatch (or are stripped real
+           entries), so they're strong starting candidates when the
+           binary has only one marked entry. Top 20 shown.
         """
+        cache_dir = current_cache_dir()
+        if cache_dir is None:
+            return NO_BINARY_SELECTED_MSG
         try:
             eps = load_entry_points(cache_dir)
         except FileNotFoundError as exc:
             return f"Analysis cache not built: {exc}"
         notes = NotesStore.load(cache_dir)
-        rows = [(e.addr, notes.display_name(e.addr, e.name)) for e in eps]
-        return _fmt_edge_table(rows)
+
+        marked_rows = [(e.addr, notes.display_name(e.addr, e.name)) for e in eps]
+        marked_addrs = {a for a, _ in marked_rows}
+
+        try:
+            roots = find_orphan_roots(cache_dir, limit=20)
+        except FileNotFoundError:
+            roots = []
+        root_rows = [
+            (r.addr, notes.display_name(r.addr, r.name), r.size)
+            for r in roots
+            if r.addr not in marked_addrs
+        ]
+
+        out = [
+            "## Marked entries",
+            "Addresses Ghidra's loader flagged as program entry "
+            "(`e_entry` on ELFs; bootstrap on DOLs). This is *the* true",
+            "execution start. Begin exploration here.",
+            "",
+            _fmt_edge_table(marked_rows),
+        ]
+        if root_rows:
+            out.extend(
+                [
+                    "",
+                    "## Orphan roots (top 20 by size)",
+                    "Functions Ghidra found but with **no in-binary callers**. "
+                    "These are reached via vtable / interrupt vector / dynamic",
+                    "dispatch / dead code / stripped symbols. They are NOT the "
+                    "program entry — they are *secondary* exploration candidates",
+                    "alongside the marked entry above. Useful when "
+                    "`find_string` doesn't surface a code path.",
+                    "",
+                    _fmt_func_table(root_rows),
+                ]
+            )
+        return "\n".join(out)
 
     return execute
 
 
 @tool
-def find_function(cache_dir: Path) -> Tool:
-    """Build the `find_function` tool bound to a sample's analysis cache."""
+def find_function() -> Tool:
+    """Build the `find_function` tool."""
 
     async def execute(pattern: str, limit: int = 40) -> str:
-        """Search the function table by regex on the name (or your renames).
+        """Search the active binary's function table by regex on the name.
 
         Args:
             pattern: Python `re` pattern. Case-insensitive. Use `.` for all.
@@ -110,6 +160,9 @@ def find_function(cache_dir: Path) -> Tool:
         Returns:
             Compact `addr  size  name` table, or `(no matches)`.
         """
+        cache_dir = current_cache_dir()
+        if cache_dir is None:
+            return NO_BINARY_SELECTED_MSG
         try:
             results = find_functions(cache_dir, pattern, limit=limit)
         except FileNotFoundError as exc:
@@ -124,11 +177,11 @@ def find_function(cache_dir: Path) -> Tool:
 
 
 @tool
-def decompile(cache_dir: Path) -> Tool:
-    """Build the `decompile` tool bound to a sample's analysis cache."""
+def decompile() -> Tool:
+    """Build the `decompile` tool."""
 
     async def execute(addr_or_name: str) -> str:
-        """Return Ghidra's C-like pseudocode for one function.
+        """Return Ghidra's C-like pseudocode for one function in the active binary.
 
         Body has your renames substituted (`FUN_xxxxxxxx` → your name).
         Header shows current name, address, size, your note (if any),
@@ -138,6 +191,9 @@ def decompile(cache_dir: Path) -> Tool:
             addr_or_name: Address (`0x80066548`, `80066548`, decimal) OR
                 original name (`FUN_80066548`) OR a name you renamed to.
         """
+        cache_dir = current_cache_dir()
+        if cache_dir is None:
+            return NO_BINARY_SELECTED_MSG
         try:
             entry, code = read_decompiled(cache_dir, addr_or_name)
         except FileNotFoundError as exc:
@@ -182,17 +238,20 @@ def decompile(cache_dir: Path) -> Tool:
 
 
 @tool
-def callees(cache_dir: Path) -> Tool:
-    """Build the `callees` tool bound to a sample's analysis cache."""
+def callees() -> Tool:
+    """Build the `callees` tool."""
 
     async def execute(addr_or_name: str) -> str:
-        """Functions called by the given function. Walk *outward*.
+        """Functions called by the given function in the active binary. Walk *outward*.
 
         Args:
             addr_or_name: Address (e.g. `0x80066548`) OR original name
                 (`FUN_80066548`) OR a name you previously assigned via
                 `rename_function`.
         """
+        cache_dir = current_cache_dir()
+        if cache_dir is None:
+            return NO_BINARY_SELECTED_MSG
         try:
             entry = resolve_function(cache_dir, addr_or_name)
             edges = callees_of(cache_dir, entry.addr)
@@ -206,17 +265,20 @@ def callees(cache_dir: Path) -> Tool:
 
 
 @tool
-def callers(cache_dir: Path) -> Tool:
-    """Build the `callers` tool bound to a sample's analysis cache."""
+def callers() -> Tool:
+    """Build the `callers` tool."""
 
     async def execute(addr_or_name: str) -> str:
-        """Functions that call the given function. Walk *inward* (xrefs to).
+        """Functions that call the given function in the active binary. Walk *inward*.
 
         Args:
             addr_or_name: Address (e.g. `0x80066548`) OR original name
                 (`FUN_80066548`) OR a name you previously assigned via
                 `rename_function`.
         """
+        cache_dir = current_cache_dir()
+        if cache_dir is None:
+            return NO_BINARY_SELECTED_MSG
         try:
             entry = resolve_function(cache_dir, addr_or_name)
             edges = callers_of(cache_dir, entry.addr)
@@ -230,11 +292,11 @@ def callers(cache_dir: Path) -> Tool:
 
 
 @tool
-def find_string(cache_dir: Path) -> Tool:
-    """Build the `find_string` tool bound to a sample's analysis cache."""
+def find_string() -> Tool:
+    """Build the `find_string` tool."""
 
     async def execute(pattern: str, limit: int = 25) -> str:
-        """Regex-search defined strings. Returns text + functions referencing each.
+        """Regex-search defined strings in the active binary.
 
         Args:
             pattern: Python `re` pattern. Case-insensitive.
@@ -243,6 +305,9 @@ def find_string(cache_dir: Path) -> Tool:
         Returns:
             For each match: `<saddr>  "<text>"\\n    xrefs: <fn1> <fn2> ...`
         """
+        cache_dir = current_cache_dir()
+        if cache_dir is None:
+            return NO_BINARY_SELECTED_MSG
         try:
             results = search_strings(cache_dir, pattern, limit=limit)
         except FileNotFoundError as exc:
@@ -273,15 +338,16 @@ def find_string(cache_dir: Path) -> Tool:
 
 
 @tool
-def rename_function(cache_dir: Path) -> Tool:
-    """Build the `rename_function` tool bound to a sample's analysis cache."""
+def rename_function() -> Tool:
+    """Build the `rename_function` tool."""
 
     async def execute(addr_or_name: str, new_name: str) -> str:
-        """Persist a rename for the function at the given address.
+        """Persist a rename for a function in the active binary.
 
         Future `find_function`, `decompile`, `callees`, `callers`, and
         `find_string` outputs will use the new name. Renaming the same
         address again overwrites the prior rename (last write wins).
+        Renames are stored per-binary in `cache/binaries/<sha1>/notes.json`.
 
         Args:
             addr_or_name: How to identify the function to rename.
@@ -289,6 +355,9 @@ def rename_function(cache_dir: Path) -> Tool:
         """
         if not new_name or not new_name.strip():
             return "Error: new_name is empty."
+        cache_dir = current_cache_dir()
+        if cache_dir is None:
+            return NO_BINARY_SELECTED_MSG
         try:
             entry = resolve_function(cache_dir, addr_or_name)
         except (FileNotFoundError, KeyError) as exc:
@@ -304,14 +373,15 @@ def rename_function(cache_dir: Path) -> Tool:
 
 
 @tool
-def add_note(cache_dir: Path) -> Tool:
-    """Build the `add_note` tool bound to a sample's analysis cache."""
+def add_note() -> Tool:
+    """Build the `add_note` tool."""
 
     async def execute(addr_or_name: str, text: str) -> str:
-        """Persist a free-text note attached to the function's address.
+        """Persist a free-text note attached to a function in the active binary.
 
         Appears in the decompile header on every future call. Overwrites
-        any prior note at the same address.
+        any prior note at the same address. Notes are stored per-binary
+        in `cache/binaries/<sha1>/notes.json`.
 
         Args:
             addr_or_name: How to identify the function.
@@ -320,6 +390,9 @@ def add_note(cache_dir: Path) -> Tool:
         """
         if not text.strip():
             return "Error: text is empty."
+        cache_dir = current_cache_dir()
+        if cache_dir is None:
+            return NO_BINARY_SELECTED_MSG
         try:
             entry = resolve_function(cache_dir, addr_or_name)
         except (FileNotFoundError, KeyError) as exc:

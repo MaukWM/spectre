@@ -15,6 +15,13 @@ from inspect_ai import Task, task
 from inspect_ai.scorer import CORRECT, INCORRECT, Score, Scorer, Target, accuracy, scorer
 from inspect_ai.solver import TaskState, basic_agent, system_message
 
+from src.agent.discovery import format_inventory, survey_and_analyze
+from src.agent.discovery_tools import (
+    analyze_binary,
+    extract_iso,
+    list_iso_contents,
+    switch_binary,
+)
 from src.agent.ghidra_tools import (
     add_note,
     callees,
@@ -25,7 +32,12 @@ from src.agent.ghidra_tools import (
     find_string,
     rename_function,
 )
-from src.agent.loader import build_sample, load_sample_config, resolve_runtime_paths
+from src.agent.loader import (
+    build_sample,
+    load_sample_config,
+    resolve_optional_user_binary,
+    resolve_runtime_paths,
+)
 from src.agent.prompts import SYSTEM_PROMPT
 from src.agent.scorer import load_mask, score_against_mask
 from src.agent.tools import _LAST_PASS_KEY, run_gecko
@@ -40,7 +52,14 @@ from src.dolphin.diff import load_image_rgb
 from src.dolphin.runner import write_user_dir
 
 SAMPLES_DIR = Path(__file__).resolve().parents[2] / "samples"
+SPECTRE_ROOT = Path(__file__).resolve().parents[2]
+EXTRACT_ROOT = SPECTRE_ROOT / "cache" / "extracted"
 DEFAULT_SAMPLE = "nightfire_hud_off"
+
+
+def _extract_root_for(iso_path: Path) -> Path:
+    """Scratch directory under `cache/extracted/` for files pulled from the ISO."""
+    return EXTRACT_ROOT / iso_path.stem
 
 
 @scorer(metrics=[accuracy()])
@@ -127,22 +146,42 @@ def hud_off_scorer(sample_dir: Path) -> Scorer:
 def hud_off() -> Task:
     """Single-Sample HUD-removal task (Nightfire reference instance)."""
     sample_dir = SAMPLES_DIR / DEFAULT_SAMPLE
-    analysis_dir = sample_dir / "analysis"
-    sample = build_sample(sample_dir)
+    cfg = load_sample_config(sample_dir)
+    iso_path, _ = resolve_runtime_paths(cfg)
+    extract_root = _extract_root_for(iso_path)
+    extract_root.mkdir(parents=True, exist_ok=True)
+
+    # Include the user's env-supplied ELF (if any) so prior-run notes
+    # under its SHA-1 cache survive into the inventory.
+    extras: list[Path] = []
+    user_binary = resolve_optional_user_binary(cfg)
+    if user_binary is not None:
+        extras.append(user_binary)
+
+    # Pre-analyze every executable on the disc + extras. Cache-hit on
+    # second run.
+    inventory = survey_and_analyze(iso_path, extract_root, extras=extras)
+    inventory_text = format_inventory(inventory)
+
+    sample = build_sample(sample_dir, inventory_text=inventory_text)
     return Task(
         dataset=[sample],
         solver=basic_agent(
             init=system_message(SYSTEM_PROMPT),
             tools=[
                 run_gecko(sample_dir),
-                entry_points(analysis_dir),
-                find_function(analysis_dir),
-                find_string(analysis_dir),
-                decompile(analysis_dir),
-                callees(analysis_dir),
-                callers(analysis_dir),
-                rename_function(analysis_dir),
-                add_note(analysis_dir),
+                entry_points(),
+                find_function(),
+                find_string(),
+                decompile(),
+                callees(),
+                callers(),
+                rename_function(),
+                add_note(),
+                list_iso_contents(iso_path),
+                extract_iso(iso_path, extract_root),
+                analyze_binary(extract_root),
+                switch_binary(),
             ],
             message_limit=200,
         ),

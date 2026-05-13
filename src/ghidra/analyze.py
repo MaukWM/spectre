@@ -26,12 +26,26 @@ from pathlib import Path
 
 from src.logging import logger
 
+# Content-addressed cache root. One subdirectory per binary SHA-1; shared
+# across samples and across runs. Gitignored.
+CACHE_ROOT = Path(__file__).resolve().parents[2] / "cache" / "binaries"
+
+
+def cache_dir_for_sha1(sha1: str) -> Path:
+    """Return the cache directory for a given binary SHA-1."""
+    return CACHE_ROOT / sha1
+
+
+def sha1_of(path: Path) -> str:
+    """Public SHA-1 helper; identical to the value used to key the cache."""
+    return _sha1(path)
+
 
 @dataclass(frozen=True)
 class AnalysisResult:
     cache_dir: Path
     project_dir: Path
-    dol_sha1: str
+    sha1: str
     function_count: int
 
 
@@ -75,37 +89,41 @@ def _ensure_empty_map(binary_path: Path) -> None:
 
 def run_analysis(
     binary_path: Path,
-    cache_dir: Path,
+    cache_dir: Path | None = None,
     *,
     project_name: str = "spectre",
     force: bool = False,
 ) -> AnalysisResult:
-    """Analyze `binary_path` (ELF or DOL) and dump the cache."""
+    """Analyze `binary_path` (ELF or DOL) and dump a content-addressed cache.
+
+    If `cache_dir` is None, derives the cache path from the binary's SHA-1
+    via `cache_dir_for_sha1`. The same binary across samples / runs hits
+    the same cache and skips re-analysis.
+    """
     home = _resolve_ghidra_home()
     os.environ["GHIDRA_INSTALL_DIR"] = str(home)
 
     binary_path = binary_path.resolve()
+    _ensure_empty_map(binary_path)
+    binary_sha1 = _sha1(binary_path)
+
+    if cache_dir is None:
+        cache_dir = cache_dir_for_sha1(binary_sha1)
     cache_dir = cache_dir.resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
     decomp_dir = cache_dir / "decompiled"
     decomp_dir.mkdir(exist_ok=True)
 
-    _ensure_empty_map(binary_path)
-
-    binary_sha1 = _sha1(binary_path)
     sentinel = cache_dir / ".binary_sha1"
-    legacy_sentinel = cache_dir / ".dol_sha1"  # back-compat
     if not force and sentinel.exists() and sentinel.read_text().strip() == binary_sha1:
         existing = list(decomp_dir.glob("*.txt"))
         logger.info("analysis_cache_hit", sha1=binary_sha1, functions=len(existing))
         return AnalysisResult(
             cache_dir=cache_dir,
             project_dir=cache_dir / "_project",
-            dol_sha1=binary_sha1,
+            sha1=binary_sha1,
             function_count=len(existing),
         )
-    if legacy_sentinel.exists():
-        legacy_sentinel.unlink()
 
     project_dir = cache_dir / "_project"
     if project_dir.exists():
@@ -124,11 +142,17 @@ def run_analysis(
         entry_points_json=cache_dir / "entry_points.json",
     )
     sentinel.write_text(binary_sha1)
+    meta = {
+        "sha1": binary_sha1,
+        "source_path": str(binary_path),
+        "functions": n,
+    }
+    (cache_dir / "meta.json").write_text(json.dumps(meta, indent=2))
     logger.info("analysis_done", sha1=binary_sha1, functions=n)
     return AnalysisResult(
         cache_dir=cache_dir,
         project_dir=project_dir,
-        dol_sha1=binary_sha1,
+        sha1=binary_sha1,
         function_count=n,
     )
 

@@ -19,6 +19,8 @@ from inspect_ai.util import store
 
 from src.agent.loader import load_sample_config, resolve_runtime_paths
 from src.agent.scorer import load_mask, score_against_mask
+from src.agent.state import BUDGET_KEY as _BUDGET_KEY
+from src.agent.state import LAST_PASS_KEY as _LAST_PASS_KEY
 from src.dolphin import (
     collect_dump,
     load_png_frames,
@@ -29,9 +31,6 @@ from src.dolphin import (
 from src.dolphin.diff import load_image_rgb
 from src.dolphin.runner import write_user_dir
 from src.logging import logger
-
-_BUDGET_KEY = "spectre_run_gecko_used"
-_LAST_PASS_KEY = "spectre_last_pass_gecko"
 
 
 def _png_to_data_url(p: Path) -> str:

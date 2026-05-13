@@ -39,7 +39,6 @@ def main() -> int:
         return 2
 
     cfg = load_sample_config(sample_dir)
-    cache_dir = sample_dir / "analysis"
     dol_path = sample_dir / "boot.dol"
 
     # Try the preferred binary first.
@@ -54,11 +53,11 @@ def main() -> int:
         logger.info("dol_extracted", size=size)
         binary = dol_path
 
-    result = run_analysis(binary, cache_dir)
+    result = run_analysis(binary)
     logger.info(
         "analysis_ready",
         cache=str(result.cache_dir),
-        functions_json=str(cache_dir / "functions.json"),
+        sha1=result.sha1,
         function_count=result.function_count,
     )
     return 0
