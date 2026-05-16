@@ -313,6 +313,8 @@ def build_task_from_project_task(
     """Build a full Inspect AI Task from a web project task."""
     if task.config.task_type == "research":
         return _build_research_task(task, project, iso_path, extract_root)
+    if task.config.task_type == "position_discovery":
+        return _build_position_discovery_task(task, project, iso_path, extract_root)
 
     sample = build_sample_from_task(task, project)
 
@@ -457,4 +459,199 @@ def _build_research_task(
             message_limit=200,
         ),
         scorer=research_scorer(),
+    )
+
+
+# ── Position discovery task ──────────────────────────────────────────── #
+
+
+def _build_position_discovery_sample(task: Task, project: Project) -> Sample:
+    """Build a Sample for a position discovery task."""
+    pcfg = project.config
+    tcfg = task.config
+    inv_block = f"\n{pcfg.inventory_text}\n" if pcfg.inventory_text else ""
+
+    # Inject prior knowledge
+    findings_store = FindingsStore.load(project.root)
+    findings_block = ""
+    non_func = [f for f in findings_store.findings if f.kind != "function"]
+    if non_func:
+        findings_block = (
+            "\n## Prior findings from earlier tasks\n\n"
+            f"{findings_store.format_table(exclude_kinds={'function'})}\n"
+        )
+
+    research_dir = project.root / "research"
+    research_block = ""
+    if research_dir.exists():
+        index_path = research_dir / "INDEX.md"
+        if index_path.exists():
+            index_text = index_path.read_text().strip()
+            docs = sorted(p.name for p in research_dir.glob("*.md") if p.name != "INDEX.md")
+            if docs or "No research yet" not in index_text:
+                research_block = (
+                    "\n## Research journal from earlier tasks\n\n"
+                    f"{index_text}\n"
+                )
+                if docs:
+                    research_block += (
+                        "\nAvailable docs: " + ", ".join(docs)
+                        + "\nUse `read_research(filename)` to read any of these.\n"
+                    )
+
+    # Inject savestate findings if any
+    ss = project.get_savestate(tcfg.savestate_id)
+    ss_findings_block = ""
+    if ss is not None:
+        ss_store = FindingsStore.load(ss.root)
+        if ss_store.findings:
+            ss_findings_block = (
+                "\n## Existing savestate findings (runtime-specific)\n\n"
+                f"{ss_store.format_table()}\n"
+            )
+
+    body = (
+        f"Position discovery task: {tcfg.hint}\n\n"
+        f"Game: {pcfg.game_id}\n"
+        f"{inv_block}{findings_block}{research_block}{ss_findings_block}"
+    )
+
+    return Sample(
+        id=f"position_{project.project_id}_{task.task_id}",
+        input=[ChatMessageUser(content=[ContentText(text=body)])],
+        target="",
+        metadata={
+            "project_id": project.project_id,
+            "task_id": task.task_id,
+            "game_id": pcfg.game_id,
+        },
+    )
+
+
+@scorer(metrics=[accuracy()])
+def position_discovery_scorer(savestate_root: Path, session_cleanup) -> Scorer:  # type: ignore[no-untyped-def]
+    """Score position discovery: check that X/Y/Z address findings were saved."""
+
+    async def score(state: InspectTaskState, target: Target) -> Score:
+        try:
+            fs = FindingsStore.load(savestate_root)
+            addr_findings = [f for f in fs.findings if f.kind == "address"]
+            labels = {f.label.lower() for f in addr_findings}
+            has_position = any(
+                axis in label
+                for label in labels
+                for axis in ("player_x", "player_y", "player_z", "pos_x", "pos_y", "pos_z")
+            )
+
+            answer = state.output.completion or ""
+            if len(addr_findings) >= 3 and has_position:
+                return Score(
+                    value=CORRECT,
+                    answer=answer[:200],
+                    explanation=(
+                        f"Found {len(addr_findings)} address findings. "
+                        f"Labels: {', '.join(f.label for f in addr_findings)}"
+                    ),
+                )
+            return Score(
+                value=INCORRECT,
+                answer=answer[:200],
+                explanation=(
+                    f"Need at least 3 address findings with position labels. "
+                    f"Got {len(addr_findings)} findings: "
+                    f"{', '.join(f.label for f in addr_findings) or 'none'}"
+                ),
+            )
+        finally:
+            # Clean up the DolphinSession
+            session_cleanup()
+
+    return score
+
+
+def _build_position_discovery_task(
+    task: Task,
+    project: Project,
+    iso_path: Path,
+    extract_root: Path,
+) -> InspectTask:
+    """Build an Inspect AI Task for runtime position discovery."""
+    from src.agent.prompts import POSITION_SYSTEM_PROMPT
+    from src.agent.runtime_tools import (
+        list_savestate_findings,
+        read_memory,
+        read_memory_batch,
+        sample_position,
+        save_savestate_finding,
+        scan_memory,
+        scan_memory_diff,
+        send_input,
+    )
+    from src.dolphin.session import DolphinSession
+
+    ss = project.get_savestate(task.config.savestate_id)
+    if ss is None:
+        raise ValueError(f"Savestate {task.config.savestate_id} not found")
+
+    sample = _build_position_discovery_sample(task, project)
+
+    # Boot DolphinSession — stays alive for entire agent run.
+    # We enter the context manager manually and clean up in the scorer.
+    session_cm = DolphinSession.start(
+        iso=iso_path,
+        savestate=ss.savestate_path,
+        pipe_input=True,
+    )
+    session = session_cm.__enter__()
+    session.wait_for_first_frame()
+
+    def _cleanup() -> None:
+        try:
+            session_cm.__exit__(None, None, None)
+        except Exception:
+            pass
+
+    return InspectTask(
+        dataset=[sample],
+        solver=basic_agent(
+            init=system_message(POSITION_SYSTEM_PROMPT),
+            tools=[
+                # Runtime tools
+                read_memory(session),
+                read_memory_batch(session),
+                scan_memory(session),
+                scan_memory_diff(session),
+                send_input(session),
+                sample_position(session),
+                # Savestate findings
+                save_savestate_finding(ss.root),
+                list_savestate_findings(ss.root),
+                # Static analysis tools
+                entry_points(),
+                find_function(),
+                find_string(),
+                decompile(),
+                callees(),
+                callers(),
+                rename_function(),
+                add_note(),
+                list_iso_contents(iso_path),
+                extract_iso(iso_path, extract_root),
+                analyze_binary(extract_root),
+                switch_binary(),
+                save_finding(project.root),
+                list_findings(project.root),
+                list_research(project.root),
+                read_research(project.root),
+                write_research(project.root),
+            ],
+            submit_description=(
+                "Submit your position discovery results and end the task. "
+                "Call this after you've saved player_x, player_y, and player_z "
+                "as savestate findings. Pass a summary of the addresses and "
+                "how you verified them."
+            ),
+            message_limit=200,
+        ),
+        scorer=position_discovery_scorer(ss.root, _cleanup),
     )

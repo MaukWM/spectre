@@ -206,12 +206,17 @@ async def list_savestates(project_id: str) -> list[dict]:  # type: ignore[type-a
     result = []
     for cfg in project.list_savestates():
         ss = project.get_savestate(cfg.savestate_id)
+        findings_count = 0
+        if ss:
+            fs = FindingsStore.load(ss.root)
+            findings_count = len(fs.findings)
         result.append({
             "savestate_id": cfg.savestate_id,
             "name": cfg.name,
             "notes": cfg.notes,
             "created_at": cfg.created_at,
             "has_screenshot": ss.screenshot_path.exists() if ss else False,
+            "findings_count": findings_count,
         })
     return result
 
@@ -280,6 +285,53 @@ async def get_savestate_screenshot(project_id: str, savestate_id: str) -> FileRe
     if not ss.screenshot_path.exists():
         raise HTTPException(404, "No screenshot rendered yet — use render-screenshot first")
     return FileResponse(ss.screenshot_path, media_type="image/png")
+
+
+# ── Savestate findings ───────────────────────────────────────────────── #
+
+
+def _get_savestate(project_id: str, savestate_id: str):  # type: ignore[no-untyped-def]
+    project = _get_project(project_id)
+    ss = project.get_savestate(savestate_id)
+    if ss is None:
+        raise HTTPException(404, f"Savestate {savestate_id} not found")
+    return project, ss
+
+
+@app.get("/api/projects/{project_id}/savestates/{savestate_id}/findings")
+async def get_savestate_findings(project_id: str, savestate_id: str) -> list[dict]:  # type: ignore[type-arg]
+    _, ss = _get_savestate(project_id, savestate_id)
+    fs = FindingsStore.load(ss.root)
+    from dataclasses import asdict
+
+    return [asdict(f) for f in fs.list_all()]
+
+
+@app.post("/api/projects/{project_id}/savestates/{savestate_id}/findings")
+async def add_savestate_finding(project_id: str, savestate_id: str, body: dict) -> dict:  # type: ignore[type-arg]
+    _, ss = _get_savestate(project_id, savestate_id)
+    fs = FindingsStore.load(ss.root)
+    f = fs.add(
+        kind=body.get("kind", "address"),
+        label=body.get("label", ""),
+        detail=body.get("detail", ""),
+        address=body.get("address", ""),
+        source_task=body.get("source_task", ""),
+    )
+    from dataclasses import asdict
+
+    return asdict(f)
+
+
+@app.delete("/api/projects/{project_id}/savestates/{savestate_id}/findings/{finding_id}")
+async def delete_savestate_finding(
+    project_id: str, savestate_id: str, finding_id: str,
+) -> dict[str, bool]:
+    _, ss = _get_savestate(project_id, savestate_id)
+    fs = FindingsStore.load(ss.root)
+    if not fs.remove(finding_id):
+        raise HTTPException(404, f"Finding {finding_id} not found")
+    return {"ok": True}
 
 
 # ── Task savestate selection ─────────────────────────────────────────── #
@@ -373,6 +425,12 @@ async def start_run(project_id: str, task_id: str, background_tasks: BackgroundT
 
     # Research tasks can go directly from CREATED to READY.
     if task.config.task_type == "research" and task.state == TaskState.CREATED:
+        task.transition(TaskState.READY)
+
+    # Position discovery: needs a savestate, skip visual steps.
+    if task.config.task_type == "position_discovery" and task.state != TaskState.READY:
+        if not task.config.savestate_id:
+            raise HTTPException(400, "Position discovery requires a savestate")
         task.transition(TaskState.READY)
 
     if task.state != TaskState.READY:

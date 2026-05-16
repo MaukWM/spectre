@@ -32,8 +32,8 @@ class TaskState(StrEnum):
 
 _TASK_TRANSITIONS: dict[TaskState, set[TaskState]] = {
     TaskState.CREATED: {TaskState.SAVESTATE_UPLOADED, TaskState.FRAME_READY, TaskState.READY},
-    TaskState.SAVESTATE_UPLOADED: {TaskState.FRAME_READY},
-    TaskState.FRAME_READY: {TaskState.FRAME_READY, TaskState.MASK_READY},
+    TaskState.SAVESTATE_UPLOADED: {TaskState.FRAME_READY, TaskState.READY},
+    TaskState.FRAME_READY: {TaskState.FRAME_READY, TaskState.MASK_READY, TaskState.READY},
     TaskState.MASK_READY: {TaskState.FRAME_READY, TaskState.READY},
     TaskState.READY: {TaskState.RUNNING},
     TaskState.RUNNING: {TaskState.DONE, TaskState.FAILED},

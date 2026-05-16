@@ -69,6 +69,65 @@ from src.logging import logger
 _IS_LINUX = sys.platform == "linux"
 
 
+def _find_dolphin_child_pid(parent_pid: int, timeout: float = 15.0) -> int:
+    """Find the actual dolphin-emu PID when launched via xvfb-run.
+
+    xvfb-run spawns Xvfb + dolphin-emu as descendants. We walk /proc
+    to find any process whose cmdline contains 'dolphin-emu' that is
+    a descendant of parent_pid. Falls back to parent_pid if not found.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            # Build pid -> ppid map
+            pid_to_ppid: dict[int, int] = {}
+            for entry in Path("/proc").iterdir():
+                if not entry.name.isdigit():
+                    continue
+                pid = int(entry.name)
+                try:
+                    status = (entry / "status").read_text()
+                    for line in status.splitlines():
+                        if line.startswith("PPid:"):
+                            pid_to_ppid[pid] = int(line.split(":")[1].strip())
+                            break
+                except (OSError, ValueError):
+                    continue
+
+            # Find descendants of parent_pid
+            def is_descendant(pid: int) -> bool:
+                visited: set[int] = set()
+                while pid in pid_to_ppid and pid not in visited:
+                    visited.add(pid)
+                    pid = pid_to_ppid[pid]
+                    if pid == parent_pid:
+                        return True
+                return False
+
+            for pid in pid_to_ppid:
+                if pid == parent_pid:
+                    continue
+                if not is_descendant(pid):
+                    continue
+                try:
+                    cmdline = (Path(f"/proc/{pid}") / "cmdline").read_bytes()
+                    if b"dolphin-emu" in cmdline:
+                        logger.info(
+                            "dolphin_child_found",
+                            parent=parent_pid,
+                            child=pid,
+                        )
+                        return pid
+                except OSError:
+                    continue
+        except OSError:
+            pass
+        time.sleep(0.5)
+
+    logger.warning("dolphin_child_not_found", parent=parent_pid)
+    return parent_pid
+
+
 @dataclass
 class DolphinSession:
     """Handle to a running Dolphin instance with input + memory capabilities."""
@@ -439,9 +498,15 @@ class DolphinSession:
             gdb_client._drain_pending()
             logger.info("gdb_stub_connected", port=gdb_port)
 
+        # When launched via xvfb-run, proc.pid is xvfb-run, not dolphin.
+        # Find the real dolphin PID for memory reads.
+        dolphin_pid = proc.pid
+        if dolphin_args[0] == "xvfb-run":
+            dolphin_pid = _find_dolphin_child_pid(proc.pid)
+
         session = cls(
             proc=proc,
-            pid=proc.pid,
+            pid=dolphin_pid,
             user_dir=user_dir,
             pipe_path=pipe_path,
             _watcher=watcher,

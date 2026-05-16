@@ -133,6 +133,33 @@ Before submitting your final answer, **document what you learned**:
 This ensures future tasks on this game can build on your work \
 instead of re-discovering the same things."""
 
+TOOLS_RUNTIME = """\
+### Runtime memory tools (live Dolphin session)
+
+- `read_memory(address, format="f32")` — read a value from GameCube RAM. \
+  Formats: "f32" (float), "u32" (unsigned int), "u8" (byte). Address is hex.
+- `read_memory_batch(addresses, format="f32")` — read multiple addresses \
+  at once. Pass comma-separated hex addresses.
+- `scan_memory(start, end, min_abs, max_abs)` — bulk-scan a GC address range \
+  for plausible float values. Returns addresses and values. Default range is \
+  full MEM1 (0x80000000–0x81800000). Takes several seconds for large ranges.
+- `scan_memory_diff(start, end, min_delta, max_delta)` — differential scan. \
+  Call once to capture baseline, send input, call again to see what changed. \
+  Filters by delta range to find position data (not timers or frame counters).
+- `send_input(action, duration)` — send controller input. Actions: \
+  stand_still, walk_forward, walk_backward, strafe_left, strafe_right, \
+  jump, walk_forward_and_jump, look_up, look_down. Blocks for duration.
+- `sample_position(x_addr, y_addr, z_addr, duration, interval)` — poll \
+  three addresses over time and return a trajectory table with displacement."""
+
+TOOLS_SAVESTATE_FINDINGS = """\
+### Savestate findings (runtime-specific, scoped to this savestate)
+
+- `save_savestate_finding(kind, label, detail, address="")` — save a \
+  runtime discovery. Use kind="address" for RAM addresses (player_x, \
+  player_y, player_z). These are specific to this savestate's memory layout.
+- `list_savestate_findings()` — list all findings saved for this savestate."""
+
 # Convenience: all shared tool docs concatenated
 TOOLS_ALL_STATIC = "\n\n".join([
     TOOLS_STATIC_ANALYSIS,

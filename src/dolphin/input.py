@@ -123,13 +123,72 @@ class InputSequence:
         )
 
     @classmethod
+    def walk_backward(cls, duration: float) -> InputSequence:
+        """Hold main stick fully backward for *duration* seconds.
+
+        Stick Y = 1.0 maps to "down" in Dolphin's pipe protocol (full positive
+        on the Y axis = backward in most games).
+        """
+        return cls(
+            commands=[
+                InputCommand(0.0, "SET MAIN 0.5 1.0"),
+                InputCommand(duration, "SET MAIN 0.5 0.5"),
+            ]
+        )
+
+    @classmethod
+    def strafe_left(cls, duration: float) -> InputSequence:
+        """Hold main stick fully left for *duration* seconds."""
+        return cls(
+            commands=[
+                InputCommand(0.0, "SET MAIN 0.0 0.5"),
+                InputCommand(duration, "SET MAIN 0.5 0.5"),
+            ]
+        )
+
+    @classmethod
+    def strafe_right(cls, duration: float) -> InputSequence:
+        """Hold main stick fully right for *duration* seconds."""
+        return cls(
+            commands=[
+                InputCommand(0.0, "SET MAIN 1.0 0.5"),
+                InputCommand(duration, "SET MAIN 0.5 0.5"),
+            ]
+        )
+
+    @classmethod
+    def look_up(cls, duration: float) -> InputSequence:
+        """Hold C-stick up for *duration* seconds (camera/aim up)."""
+        return cls(
+            commands=[
+                InputCommand(0.0, "SET C 0.5 0.0"),
+                InputCommand(duration, "SET C 0.5 0.5"),
+            ]
+        )
+
+    @classmethod
+    def look_down(cls, duration: float) -> InputSequence:
+        """Hold C-stick down for *duration* seconds (camera/aim down)."""
+        return cls(
+            commands=[
+                InputCommand(0.0, "SET C 0.5 1.0"),
+                InputCommand(duration, "SET C 0.5 0.5"),
+            ]
+        )
+
+    @classmethod
     def from_preset(cls, name: str, duration: float = 5.0) -> InputSequence:
         """Look up a named preset. Raises ValueError for unknown names."""
         presets: dict[str, Callable[..., InputSequence]] = {
             "stand_still": cls.stand_still,
             "walk_forward": cls.walk_forward,
+            "walk_backward": cls.walk_backward,
+            "strafe_left": cls.strafe_left,
+            "strafe_right": cls.strafe_right,
             "jump": cls.jump,
             "walk_forward_and_jump": cls.walk_forward_and_jump,
+            "look_up": cls.look_up,
+            "look_down": cls.look_down,
         }
         factory = presets.get(name)
         if factory is None:
@@ -142,7 +201,12 @@ class InputSequence:
 
 # --- FIFO + config file management ---------------------------------------- #
 
-PRESET_NAMES = ["stand_still", "walk_forward", "jump", "walk_forward_and_jump"]
+PRESET_NAMES = [
+    "stand_still", "walk_forward", "walk_backward",
+    "strafe_left", "strafe_right",
+    "jump", "walk_forward_and_jump",
+    "look_up", "look_down",
+]
 
 
 def setup_pipe_input(

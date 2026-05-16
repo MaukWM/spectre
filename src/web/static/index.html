@@ -81,6 +81,13 @@
             <div id="ss-screenshot-spinner" class="spinner" hidden>booting dolphin...</div>
           </div>
         </div>
+        <div id="ss-findings-section" style="margin-top:1rem;" hidden>
+          <div class="section-header" style="margin-bottom:0.5rem;">
+            <h2>Findings</h2>
+          </div>
+          <table class="kb-table" id="ss-findings-table"></table>
+        </div>
+        <div id="ss-no-findings" style="margin-top:1rem; color:var(--text-dim); font-size:0.8rem;">No findings for this savestate.</div>
       </div>
 
       <div class="section-header" style="margin-top: 2rem;">
@@ -88,6 +95,7 @@
         <div class="btn-group">
           <button onclick="createTask('hud_detection')">+ HUD Detection</button>
           <button onclick="createTask('research')">+ Research</button>
+          <button onclick="createTask('position_discovery')">+ Position Discovery</button>
         </div>
       </div>
 
@@ -787,11 +795,15 @@
           const screenshotTag = s.has_screenshot
             ? '<span class="status-tag ready">screenshot</span>'
             : '<span class="status-tag analyzing">no screenshot</span>';
+          const findingsTag = s.findings_count
+            ? `<span class="status-tag ready">${s.findings_count} findings</span>`
+            : '';
           return `<li>
             <span class="cursor" onclick="expandSavestate('${s.savestate_id}')">&gt;</span>
             <span class="task-type" onclick="expandSavestate('${s.savestate_id}')">${name}</span>
             <span class="meta">${timeAgo(s.created_at)}${notes}</span>
             ${screenshotTag}
+            ${findingsTag}
             <button class="danger delete-btn" onclick="event.stopPropagation(); deleteSavestate('${s.savestate_id}')">x</button>
           </li>`;
         }).join('');
@@ -837,8 +849,48 @@
         } else {
           img.style.display = 'none';
         }
+        loadSavestateFindings(ssId);
       } catch (e) {
         console.error('Failed to load savestate:', e);
+      }
+    }
+
+    async function loadSavestateFindings(ssId) {
+      const section = document.getElementById('ss-findings-section');
+      const noFindings = document.getElementById('ss-no-findings');
+      const table = document.getElementById('ss-findings-table');
+
+      try {
+        const findings = await api('GET', `/api/projects/${currentProjectId}/savestates/${ssId}/findings`);
+        if (!findings.length) {
+          section.hidden = true;
+          noFindings.hidden = false;
+          return;
+        }
+        noFindings.hidden = true;
+        section.hidden = false;
+        const kindClass = k => k === 'address' ? 'kb-kind-addr' : k === 'function' ? 'kb-kind-func' : 'kb-kind-note';
+        table.innerHTML =
+          `<tr><th>Kind</th><th>Address</th><th>Label</th><th class="kb-th-detail">Detail</th><th></th></tr>` +
+          findings.map(f => `<tr>
+            <td><span class="kb-kind ${kindClass(f.kind)}">${f.kind}</span></td>
+            <td class="kb-addr">${f.address ? '0x' + f.address : ''}</td>
+            <td class="kb-name">${f.label}</td>
+            <td class="kb-detail">${f.detail}</td>
+            <td><button class="danger" style="padding:0.1rem 0.4rem;font-size:0.7rem" onclick="deleteSavestateFinding('${ssId}', '${f.id}')">x</button></td>
+          </tr>`).join('');
+      } catch (e) {
+        console.error('Failed to load savestate findings:', e);
+      }
+    }
+
+    async function deleteSavestateFinding(ssId, findingId) {
+      if (!confirm('Delete this finding?')) return;
+      try {
+        await api('DELETE', `/api/projects/${currentProjectId}/savestates/${ssId}/findings/${findingId}`);
+        loadSavestateFindings(ssId);
+      } catch (e) {
+        alert('Delete failed: ' + e.message);
       }
     }
 
@@ -913,17 +965,56 @@
         surveyComplete = t.survey_complete || false;
         const state = t.state;
         const isResearch = t.task_type === 'research';
+        const isPosition = t.task_type === 'position_discovery';
 
         if (isResearch) {
           // Research tasks: hide upload steps, show only run + results
           document.getElementById('step-savestate').hidden = true;
           document.getElementById('step-screenshot').hidden = true;
           document.getElementById('step-mask').hidden = true;
+          // Renumber visible steps: 01=run, 02=results
+          document.querySelector('#step-run .step-num').textContent = '01';
+          document.querySelector('#step-results .step-num').textContent = '02';
           document.getElementById('hint-input').value = t.hint || 'Explore the codebase and document your findings.';
           document.getElementById('budget-input').parentElement.parentElement.hidden = true;
           document.getElementById('run-seconds-input').parentElement.parentElement.hidden = true;
 
           if (state === 'created' || state === 'ready') {
+            unlockStep('step-run');
+          } else if (state === 'running') {
+            unlockStep('step-run');
+          } else if (state === 'done' || state === 'failed') {
+            unlockStep('step-run');
+            completeStep('step-run', state);
+            loadResults();
+          }
+          return;
+        }
+
+        if (isPosition) {
+          // Position discovery: savestate selector + run, no screenshot/mask
+          document.getElementById('step-screenshot').hidden = true;
+          document.getElementById('step-mask').hidden = true;
+          // Renumber visible steps: 01=savestate, 02=run, 03=results
+          document.querySelector('#step-run .step-num').textContent = '02';
+          document.querySelector('#step-results .step-num').textContent = '03';
+          const defaultHint = 'Find the exact RAM addresses for player X, Y, Z position.';
+          document.getElementById('hint-input').value = (t.hint && t.hint !== 'Remove all HUD elements marked in the mask.') ? t.hint : defaultHint;
+          document.getElementById('budget-input').parentElement.parentElement.hidden = true;
+          document.getElementById('run-seconds-input').parentElement.parentElement.hidden = true;
+
+          unlockStep('step-savestate');
+          populateSavestateDropdown();
+
+          if (t.savestate_id) {
+            setTimeout(() => { document.getElementById('savestate-select').value = t.savestate_id; }, 200);
+          }
+
+          if (state === 'created') return;
+
+          // Savestate selected — go straight to run
+          completeStep('step-savestate', 'selected');
+          if (state === 'ready' || state === 'savestate_uploaded') {
             unlockStep('step-run');
           } else if (state === 'running') {
             unlockStep('step-run');
@@ -1031,13 +1122,20 @@
       try {
         const result = await api('POST', `${taskPath()}/select-savestate`, { savestate_id: ssId });
         completeStep('step-savestate', 'selected');
-        if (result.has_reference) {
-          // Screenshot was already rendered — skip capture, go straight to mask.
+
+        // Reload task to get current state, then route by task type.
+        const t = await api('GET', `${taskPath()}`);
+
+        if (t.task_type === 'position_discovery') {
+          // Position discovery: go straight to run.
+          unlockStep('step-run');
+        } else if (result.has_reference) {
+          // HUD: screenshot was already rendered — skip capture, go to mask.
           completeStep('step-screenshot', 'from savestate');
           unlockStep('step-mask');
           initMaskPainter(`${taskPath()}/files/reference.png`);
         } else {
-          // No screenshot cached — need to capture.
+          // HUD: no screenshot cached — need to capture.
           unlockStep('step-screenshot');
         }
       } catch (e) {
