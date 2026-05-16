@@ -162,10 +162,11 @@ def build_sample(
     research_block = ""
     if project_root is not None:
         findings_store = FindingsStore.load(project_root)
-        if findings_store.findings:
+        non_func = [f for f in findings_store.findings if f.kind != "function"]
+        if non_func:
             findings_block = (
                 "\n## Prior findings from earlier tasks\n\n"
-                f"{findings_store.format_table()}\n"
+                f"{findings_store.format_table(exclude_kinds={'function'})}\n"
             )
 
         research_dir = project_root / "research"

@@ -260,6 +260,11 @@ async def update_config(project_id: str, task_id: str, body: dict) -> dict[str, 
 @app.post("/api/projects/{project_id}/tasks/{task_id}/run")
 async def start_run(project_id: str, task_id: str, background_tasks: BackgroundTasks) -> dict[str, bool]:  # type: ignore[type-arg]
     project, task = _get_task(project_id, task_id)
+
+    # Research tasks can go directly from CREATED to READY.
+    if task.config.task_type == "research" and task.state == TaskState.CREATED:
+        task.transition(TaskState.READY)
+
     if task.state != TaskState.READY:
         raise HTTPException(400, f"Cannot start run in state {task.state}")
 

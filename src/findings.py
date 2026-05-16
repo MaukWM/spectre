@@ -160,9 +160,16 @@ class FindingsStore:
                 return True
         return False
 
-    def format_table(self) -> str:
-        """Format findings as a human-readable table for the agent."""
+    def format_table(self, exclude_kinds: set[str] | None = None) -> str:
+        """Format findings as a human-readable table for the agent.
+
+        Args:
+            exclude_kinds: Kinds to skip (e.g. {"function"} to omit
+                function findings that are already visible via Ghidra renames).
+        """
         findings = self.list_all()
+        if exclude_kinds:
+            findings = [f for f in findings if f.kind not in exclude_kinds]
         if not findings:
             return "No findings saved yet."
         lines = [f"{'ID':<6} {'Kind':<10} {'Address':<12} {'Label':<24} Detail"]

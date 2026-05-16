@@ -36,7 +36,7 @@ from src.agent.ghidra_tools import (
     find_string,
     rename_function,
 )
-from src.agent.prompts import SYSTEM_PROMPT, TASK_INPUT_PREFIX
+from src.agent.prompts import RESEARCH_SYSTEM_PROMPT, SYSTEM_PROMPT, TASK_INPUT_PREFIX
 from src.agent.scorer import load_mask, score_against_mask
 from src.agent.tools import _LAST_PASS_KEY
 from src.findings import FindingsStore
@@ -52,13 +52,14 @@ def build_sample_from_task(task: Task, project: Project) -> Sample:
     tcfg = task.config
     inv_block = f"\n{pcfg.inventory_text}\n" if pcfg.inventory_text else ""
 
-    # Inject prior findings if any exist
+    # Inject prior findings (exclude function kind — already visible via Ghidra renames)
     findings_store = FindingsStore.load(project.root)
     findings_block = ""
-    if findings_store.findings:
+    non_func = [f for f in findings_store.findings if f.kind != "function"]
+    if non_func:
         findings_block = (
             "\n## Prior findings from earlier tasks\n\n"
-            f"{findings_store.format_table()}\n"
+            f"{findings_store.format_table(exclude_kinds={'function'})}\n"
         )
 
     # Inject research index if any docs exist
@@ -300,6 +301,9 @@ def build_task_from_project_task(
     extract_root: Path,
 ) -> InspectTask:
     """Build a full Inspect AI Task from a web project task."""
+    if task.config.task_type == "research":
+        return _build_research_task(task, project, iso_path, extract_root)
+
     sample = build_sample_from_task(task, project)
 
     return InspectTask(
@@ -329,4 +333,118 @@ def build_task_from_project_task(
             message_limit=200,
         ),
         scorer=web_scorer(task, project),
+    )
+
+
+# ── Research task ─────────────────────────────────────────────────────── #
+
+
+def _build_research_sample(task: Task, project: Project) -> Sample:
+    """Build a Sample for a research (static-only) task."""
+    pcfg = project.config
+    tcfg = task.config
+    inv_block = f"\n{pcfg.inventory_text}\n" if pcfg.inventory_text else ""
+
+    # Inject prior knowledge (exclude function kind — visible via Ghidra renames)
+    findings_store = FindingsStore.load(project.root)
+    findings_block = ""
+    non_func = [f for f in findings_store.findings if f.kind != "function"]
+    if non_func:
+        findings_block = (
+            "\n## Prior findings from earlier tasks\n\n"
+            f"{findings_store.format_table(exclude_kinds={'function'})}\n"
+        )
+
+    research_dir = project.root / "research"
+    research_block = ""
+    if research_dir.exists():
+        index_path = research_dir / "INDEX.md"
+        if index_path.exists():
+            index_text = index_path.read_text().strip()
+            docs = sorted(p.name for p in research_dir.glob("*.md") if p.name != "INDEX.md")
+            if docs or "No research yet" not in index_text:
+                research_block = (
+                    "\n## Research journal from earlier tasks\n\n"
+                    f"{index_text}\n"
+                )
+                if docs:
+                    research_block += (
+                        "\nAvailable docs: " + ", ".join(docs)
+                        + "\nUse `read_research(filename)` to read any of these.\n"
+                    )
+
+    body = (
+        f"Research task: {tcfg.hint}\n\n"
+        f"Game: {pcfg.game_id}\n"
+        f"{inv_block}{findings_block}{research_block}"
+    )
+
+    return Sample(
+        id=f"research_{project.project_id}_{task.task_id}",
+        input=[ChatMessageUser(content=[ContentText(text=body)])],
+        target="",
+        metadata={
+            "project_id": project.project_id,
+            "task_id": task.task_id,
+            "game_id": pcfg.game_id,
+        },
+    )
+
+
+@scorer(metrics=[accuracy()])
+def research_scorer() -> Scorer:
+    """Research tasks always pass — the value is in the findings/docs produced."""
+
+    async def score(state: InspectTaskState, target: Target) -> Score:
+        answer = state.output.completion or ""
+        return Score(
+            value=CORRECT,
+            answer=answer[:200],
+            explanation="Research task completed.",
+        )
+
+    return score
+
+
+def _build_research_task(
+    task: Task,
+    project: Project,
+    iso_path: Path,
+    extract_root: Path,
+) -> InspectTask:
+    """Build an Inspect AI Task for static-only research."""
+    sample = _build_research_sample(task, project)
+
+    return InspectTask(
+        dataset=[sample],
+        solver=basic_agent(
+            init=system_message(RESEARCH_SYSTEM_PROMPT),
+            tools=[
+                entry_points(),
+                find_function(),
+                find_string(),
+                decompile(),
+                callees(),
+                callers(),
+                rename_function(),
+                add_note(),
+                list_iso_contents(iso_path),
+                extract_iso(iso_path, extract_root),
+                analyze_binary(extract_root),
+                switch_binary(),
+                save_finding(project.root),
+                list_findings(project.root),
+                list_research(project.root),
+                read_research(project.root),
+                write_research(project.root),
+            ],
+            submit_description=(
+                "Submit your research summary and end the task. "
+                "Call this after you've saved findings and written "
+                "research docs. Pass a concise summary of what you "
+                "discovered as the answer."
+            ),
+            message_limit=200,
+        ),
+        scorer=research_scorer(),
     )

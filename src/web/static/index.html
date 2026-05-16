@@ -50,7 +50,10 @@
 
       <div class="section-header">
         <h2>Tasks</h2>
-        <button onclick="createTask()">+ New HUD Detection Task</button>
+        <div class="btn-group">
+          <button onclick="createTask('hud_detection')">+ HUD Detection</button>
+          <button onclick="createTask('research')">+ Research</button>
+        </div>
       </div>
 
       <ul class="task-list" id="task-list"></ul>
@@ -138,8 +141,8 @@
         </div>
         <div class="step-body">
           <div class="config-panel">
-            <label>Hint: <textarea id="hint-input" rows="2">Remove all HUD elements marked in the mask.</textarea></label>
-            <p class="hint">Task description given to the agent. Can include game-specific context.</p>
+            <label>Prompt: <textarea id="hint-input" rows="3">Remove all HUD elements marked in the mask.</textarea></label>
+            <p class="hint">Task description / research question given to the agent.</p>
             <div class="config-row">
               <label>Budget: <input type="number" id="budget-input" value="8" min="1" max="20">
                 <span class="field-hint">Max Dolphin test runs</span>
@@ -711,9 +714,9 @@
       poll();
     }
 
-    async function createTask() {
+    async function createTask(taskType) {
       try {
-        const { task_id } = await api('POST', `/api/projects/${currentProjectId}/tasks`, { type: 'hud_detection' });
+        const { task_id } = await api('POST', `/api/projects/${currentProjectId}/tasks`, { type: taskType });
         location.hash = `#/project/${currentProjectId}/task/${task_id}`;
       } catch (e) {
         alert('Failed to create task: ' + e.message);
@@ -742,15 +745,35 @@
 
         const t = await api('GET', `/api/projects/${currentProjectId}/tasks/${currentTaskId}`);
         surveyComplete = t.survey_complete || false;
-
-        // Restore wizard state based on task state.
         const state = t.state;
+        const isResearch = t.task_type === 'research';
 
+        if (isResearch) {
+          // Research tasks: hide upload steps, show only run + results
+          document.getElementById('step-savestate').hidden = true;
+          document.getElementById('step-screenshot').hidden = true;
+          document.getElementById('step-mask').hidden = true;
+          document.getElementById('hint-input').value = t.hint || 'Explore the codebase and document your findings.';
+          document.getElementById('budget-input').parentElement.parentElement.hidden = true;
+          document.getElementById('run-seconds-input').parentElement.parentElement.hidden = true;
+
+          if (state === 'created' || state === 'ready') {
+            unlockStep('step-run');
+          } else if (state === 'running') {
+            unlockStep('step-run');
+          } else if (state === 'done' || state === 'failed') {
+            unlockStep('step-run');
+            completeStep('step-run', state);
+            loadResults();
+          }
+          return;
+        }
+
+        // HUD detection flow
         // Step 1: savestate is always unlocked.
         unlockStep('step-savestate');
 
         if (state === 'created') {
-          // Nothing uploaded yet.
           return;
         }
 
@@ -887,11 +910,16 @@
     }
 
     async function startRun() {
-      await api('POST', `${taskPath()}/config`, {
+      const config = {
         hint: document.getElementById('hint-input').value,
-        verify_budget: parseInt(document.getElementById('budget-input').value),
-        run_seconds: parseInt(document.getElementById('run-seconds-input').value),
-      });
+      };
+      const budgetEl = document.getElementById('budget-input');
+      const runSecsEl = document.getElementById('run-seconds-input');
+      if (!budgetEl.parentElement.parentElement.hidden) {
+        config.verify_budget = parseInt(budgetEl.value);
+        config.run_seconds = parseInt(runSecsEl.value);
+      }
+      await api('POST', `${taskPath()}/config`, config);
 
       const btn = document.getElementById('run-btn');
       btn.disabled = true;
