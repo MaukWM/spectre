@@ -53,10 +53,9 @@ RUN curl -fsSL "$GCL_URL" -o /tmp/gcl.zip \
 ENV DAYWATER_GHIDRA_HOME=/opt/ghidra
 ENV GHIDRA_INSTALL_DIR=/opt/ghidra
 
-# Pre-compile Ghidra SLEIGH processor specs (required for analysis).
-# Without this, first-run analysis fails with "language probably did not compile properly".
-# Must also compile GameCubeLoader's custom Gekko/Broadway language spec.
-RUN /opt/ghidra/support/sleigh -a /opt/ghidra/Ghidra/Processors \
+# Pre-compile only the SLEIGH specs we need: PowerPC (stock) + Gekko/Broadway (GameCubeLoader).
+# `sleigh -a` on all Processors takes 10+ minutes for architectures we never use.
+RUN /opt/ghidra/support/sleigh -a /opt/ghidra/Ghidra/Processors/PowerPC \
     && /opt/ghidra/support/sleigh \
        /opt/ghidra/Ghidra/Extensions/GameCubeLoader/data/languages/ppc_gekko_broadway.slaspec \
        /opt/ghidra/Ghidra/Extensions/GameCubeLoader/data/languages/ppc_gekko_broadway.sla \
