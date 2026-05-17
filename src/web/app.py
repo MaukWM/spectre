@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.findings import FindingsStore
+from src.ghidra import list_iso_files
 from src.ghidra.notes import NotesStore
 from src.web.events import stream_events
 from src.web.mask import save_mask
@@ -866,6 +867,74 @@ async def get_knowledge(project_id: str) -> dict:  # type: ignore[type-arg]
                 })
 
     return {"findings": findings, "renames": renames, "notes": notes}
+
+
+# ── Disc contents ──────────────────────────────────────────────────── #
+
+
+@app.get("/api/projects/{project_id}/disc-contents")
+async def get_disc_contents(project_id: str) -> dict:  # type: ignore[type-arg]
+    """Return the full ISO filesystem as a flat file list + analyzed binary info."""
+    project = _get_project(project_id)
+    if not project.iso_path.exists():
+        raise HTTPException(404, "No ISO uploaded for this project")
+
+    from src.ghidra.iso import read_header
+
+    files = list_iso_files(project.iso_path)
+
+    # boot.dol is not in the FST — add it as a synthetic entry from the disc header
+    hdr = read_header(project.iso_path)
+    dol_size = 0
+    try:
+        with project.iso_path.open("rb") as f:
+            # DOL header: 7 text segments + 11 data segments, each with offset+addr+size
+            # Total DOL size = max(offset + size) across all segments
+            f.seek(hdr.dol_offset)
+            dol_hdr = f.read(0x100)
+            if len(dol_hdr) >= 0x100:
+                max_end = 0
+                for i in range(18):  # 7 text + 11 data segments
+                    off = int.from_bytes(dol_hdr[i * 4 : i * 4 + 4], "big")
+                    sz = int.from_bytes(dol_hdr[0x90 + i * 4 : 0x94 + i * 4], "big")
+                    if off and sz:
+                        max_end = max(max_end, off + sz)
+                dol_size = max_end
+    except Exception:
+        pass
+
+    file_list = [{"path": "boot.dol", "size": dol_size, "is_directory": False}]
+    file_list.extend(
+        {"path": f.path, "size": f.size, "is_directory": False}
+        for f in files
+    )
+
+    # analyzed_binaries stored during survey: label → {sha1, function_count}
+    # Fallback for projects surveyed before this field existed: parse inventory_text
+    analyzed_binaries = project.config.analyzed_binaries or {}
+    if not analyzed_binaries and project.config.inventory_text:
+        import re
+
+        for line in project.config.inventory_text.splitlines():
+            # Match lines like: "  boot.dol      3,613,184  f3bf225d...  11250  note"
+            m = re.match(
+                r"\s+(\S+)\s+[\d,]+\s+([0-9a-f]{40})\s+(\d+)",
+                line,
+            )
+            if m:
+                analyzed_binaries[m.group(1)] = {
+                    "sha1": m.group(2),
+                    "function_count": int(m.group(3)),
+                }
+
+    total_size = sum(f.size for f in files)
+
+    return {
+        "files": file_list,
+        "analyzed_binaries": analyzed_binaries,
+        "total_files": len(file_list),
+        "total_size": total_size,
+    }
 
 
 # ── Settings ───────────────────────────────────────────────────────── #

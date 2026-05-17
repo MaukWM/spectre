@@ -65,6 +65,12 @@ class ProjectConfig:
     survey_binaries_done: int = 0
     survey_complete: bool = False
     inventory_text: str = ""
+    # Map of label → {sha1, function_count} for analyzed binaries.
+    analyzed_binaries: dict[str, dict[str, object]] = None  # type: ignore[assignment]
+
+    def __post_init__(self) -> None:
+        if self.analyzed_binaries is None:
+            self.analyzed_binaries = {}
 
 
 @dataclass

@@ -55,6 +55,10 @@ async def run_survey(project: Project) -> None:
             inventory = await loop.run_in_executor(_executor, _run_survey)
 
             project.config.inventory_text = format_inventory(inventory)
+            project.config.analyzed_binaries = {
+                c.label: {"sha1": c.sha1, "function_count": c.function_count}
+                for c in inventory
+            }
             project.config.survey_binaries_done = len(inventory)
             project.config.survey_binaries_total = len(inventory)
             project.config.survey_complete = True

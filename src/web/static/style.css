@@ -1546,3 +1546,121 @@ button.danger:hover:not(:disabled) {
   flex-shrink: 0;
   font-weight: 600;
 }
+
+/* ── Disc Contents Tree ────────────────────────────────────────────── */
+
+.dc-tree {
+  font-size: 0.78rem;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  max-height: 420px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.dc-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.6rem;
+  border-bottom: 1px solid rgba(30, 38, 48, 0.4);
+  min-height: 1.8rem;
+  transition: background 0.08s;
+}
+
+.dc-row:last-child {
+  border-bottom: none;
+}
+
+.dc-row:hover {
+  background: var(--surface-hover);
+}
+
+.dc-dir {
+  cursor: pointer;
+  user-select: none;
+}
+
+.dc-dir-open {
+  background: rgba(0, 255, 159, 0.02);
+}
+
+.dc-toggle {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  width: 1rem;
+  text-align: center;
+  flex-shrink: 0;
+  font-weight: 700;
+  font-family: monospace;
+}
+
+.dc-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dc-dirname {
+  font-weight: 600;
+  color: var(--amber);
+}
+
+.dc-size {
+  color: var(--text-dim);
+  font-size: 0.72rem;
+  flex-shrink: 0;
+  min-width: 60px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.dc-meta {
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.dc-badge {
+  font-size: 0.62rem;
+  padding: 0.05rem 0.35rem;
+  border: 1px solid var(--green-dim);
+  color: var(--green);
+  flex-shrink: 0;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* File type colors */
+.dc-type-bin {
+  color: var(--green);
+  font-weight: 600;
+}
+
+.dc-type-arc {
+  color: #7eb8da;
+}
+
+.dc-type-media {
+  color: #c490d1;
+}
+
+.dc-type-audio {
+  color: #d4a76a;
+}
+
+.dc-type-debug {
+  color: #ff6b6b;
+  font-weight: 600;
+}
+
+.dc-type-texture {
+  color: #8cc98c;
+}
+
+.dc-type-other {
+  color: var(--text);
+}
