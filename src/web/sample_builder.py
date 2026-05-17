@@ -705,8 +705,18 @@ def _build_noclip_sample(task: Task, project: Project) -> Sample:
     ctrl_mapping = load_mapping(project.root)
     ctrl_block = f"\n## {format_mapping_for_prompt(ctrl_mapping)}\n"
 
+    pf = tcfg.prompt_fields
+    if pf:
+        objective = pf.get("objective", tcfg.hint)
+        controls = pf.get("expected_controls", "")
+        task_block = f"## Objective\n\n{objective}\n"
+        if controls:
+            task_block += f"\n## Expected noclip controls\n\n{controls}\n"
+    else:
+        task_block = f"Noclip / freecam task: {tcfg.hint}\n"
+
     body = (
-        f"Noclip / freecam task: {tcfg.hint}\n\n"
+        f"{task_block}\n"
         f"Game: {pcfg.game_id}\n"
         f"{inv_block}{findings_block}{research_block}{ss_findings_block}{ctrl_block}"
     )

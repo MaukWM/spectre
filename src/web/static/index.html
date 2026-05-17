@@ -118,6 +118,12 @@
           <div class="config-panel">
             <label>Prompt: <textarea id="hint-input" rows="3">Remove all HUD elements marked in the mask.</textarea></label>
             <p class="hint">Task description / research question given to the agent.</p>
+            <div id="noclip-fields" hidden>
+              <label>Objective: <textarea id="noclip-objective" rows="2">Create a Gecko code that enables noclip / freecam — the player must be able to fly freely in all three axes.</textarea></label>
+              <p class="hint">What the agent should achieve. Game-specific context goes here.</p>
+              <label>Expected controls: <textarea id="noclip-controls" rows="2">Look-direction flight: looking up + walking forward = fly upward. Or: dedicated L/R triggers for ascend/descend.</textarea></label>
+              <p class="hint">Describe what noclip controls might look like in this game. Helps the agent understand the target behavior.</p>
+            </div>
             <div class="config-row">
               <label>Budget: <input type="number" id="budget-input" value="8" min="1" max="20">
                 <span class="field-hint">Max Dolphin test runs</span>
@@ -395,6 +401,15 @@
         const st = s.querySelector('.step-status');
         if (st) st.textContent = '';
       });
+      // Reset noclip field visibility
+      document.getElementById('noclip-fields').hidden = true;
+      const hintLabel = document.getElementById('hint-input').parentElement;
+      hintLabel.hidden = false;
+      hintLabel.nextElementSibling.hidden = false;
+      // Reset step visibility
+      document.getElementById('step-savestate').hidden = false;
+      document.getElementById('step-screenshot').hidden = false;
+      document.getElementById('step-mask').hidden = false;
       surveyComplete = false;
       maskSubmitted = false;
     }
@@ -1189,12 +1204,21 @@
           // Renumber visible steps: 01=savestate, 02=run, 03=results
           document.querySelector('#step-run .step-num').textContent = '02';
           document.querySelector('#step-results .step-num').textContent = '03';
-          const defaultHint = isNoclip
-            ? 'Create a Gecko code that enables noclip / freecam. Use research docs and position findings.'
-            : 'Find the exact RAM addresses for player X, Y, Z position.';
-          document.getElementById('hint-input').value = (t.hint && t.hint !== 'Remove all HUD elements marked in the mask.') ? t.hint : defaultHint;
           document.getElementById('budget-input').parentElement.parentElement.hidden = true;
           document.getElementById('run-seconds-input').parentElement.parentElement.hidden = true;
+
+          if (isNoclip) {
+            // Show structured noclip fields, hide generic hint label + description
+            const hintLabel = document.getElementById('hint-input').parentElement;
+            hintLabel.hidden = true;
+            hintLabel.nextElementSibling.hidden = true;
+            document.getElementById('noclip-fields').hidden = false;
+            const pf = t.prompt_fields || {};
+            document.getElementById('noclip-objective').value = pf.objective || 'Create a Gecko code that enables noclip / freecam \u2014 the player must be able to fly freely in all three axes.';
+            document.getElementById('noclip-controls').value = pf.expected_controls || 'Look-direction flight: looking up + walking forward = fly upward. Or: dedicated L/R triggers for ascend/descend.';
+          } else {
+            document.getElementById('hint-input').value = (t.hint && t.hint !== 'Remove all HUD elements marked in the mask.') ? t.hint : 'Find the exact RAM addresses for player X, Y, Z position.';
+          }
 
           unlockStep('step-savestate');
           populateSavestateDropdown();
@@ -1410,9 +1434,16 @@
     }
 
     async function startRun() {
-      const config = {
-        hint: document.getElementById('hint-input').value,
-      };
+      const config = {};
+      const noclipFields = document.getElementById('noclip-fields');
+      if (!noclipFields.hidden) {
+        config.prompt_fields = {
+          objective: document.getElementById('noclip-objective').value,
+          expected_controls: document.getElementById('noclip-controls').value,
+        };
+      } else {
+        config.hint = document.getElementById('hint-input').value;
+      }
       const budgetEl = document.getElementById('budget-input');
       const runSecsEl = document.getElementById('run-seconds-input');
       if (!budgetEl.parentElement.parentElement.hidden) {

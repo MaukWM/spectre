@@ -463,7 +463,7 @@ async def submit_mask(project_id: str, task_id: str, file: UploadFile) -> dict: 
 @app.post("/api/projects/{project_id}/tasks/{task_id}/config")
 async def update_config(project_id: str, task_id: str, body: dict) -> dict[str, bool]:  # type: ignore[type-arg]
     project, task = _get_task(project_id, task_id)
-    for key in ("hint", "run_seconds", "verify_budget", "hud_min_mean", "preserve_max_mean"):
+    for key in ("hint", "prompt_fields", "run_seconds", "verify_budget", "hud_min_mean", "preserve_max_mean"):
         if key in body:
             setattr(task.config, key, body[key])
     task.save()

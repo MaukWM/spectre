@@ -51,6 +51,10 @@ on the horizontal plane. The proof of noclip is vertical (Y) movement.
 
 ## What you already have
 
+- **Task-specific prompt fields** in the task description below: an \
+  objective describing what to achieve, and an expected noclip control \
+  scheme. Follow these — they provide game-specific context on top of \
+  this general guide.
 - **Research docs** from earlier tasks that describe the game's movement \
   system, collision, and any debug/noclip mechanisms. Read these FIRST — \
   they likely contain the exact addresses and values you need.
@@ -59,6 +63,22 @@ on the horizontal plane. The proof of noclip is vertical (Y) movement.
 - **A live Dolphin session** booted from a savestate. You can read memory, \
   send controller input, and test Gecko codes interactively.
 - **Static analysis tools** for further code investigation if needed.
+
+## Robustness requirement — MANDATORY
+
+Your Gecko code MUST be savestate-agnostic. It must work from ANY savestate \
+of the same game, not just the one you're testing with. This means:
+
+- **Patch CODE addresses only** — code segment addresses (0x800xxxxx–0x8029xxxx \
+  typically) are stable across all boots and savestates.
+- **NEVER write to heap/object addresses** in Gecko codes. Heap addresses \
+  (0x80Axxxxx, 0x80Bxxxxx, 0x817xxxxx) differ per boot and per savestate.
+- **Link every patch to decompiled code** — before writing a Gecko code, \
+  `decompile()` the target address and verify it's the function you intend \
+  to patch. Document which function and what the patch does.
+- **Verify via code, not via side effects** — after `apply_gecko_code()`, \
+  `read_memory()` the patched address to confirm the instruction was \
+  replaced. Then test movement. Both checks are required.
 
 ## Tooling
 

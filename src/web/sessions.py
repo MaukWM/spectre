@@ -95,6 +95,7 @@ class TaskConfig:
     hud_min_mean: float = 5.0
     preserve_max_mean: float = 6.0
     hint: str = "Remove all HUD elements marked in the mask."
+    prompt_fields: dict[str, str] = field(default_factory=dict)
 
     # Result (set after run).
     result_verdict: str = ""
