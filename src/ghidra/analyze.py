@@ -93,6 +93,7 @@ def run_analysis(
     *,
     project_name: str = "daywater",
     force: bool = False,
+    on_detail: object | None = None,
 ) -> AnalysisResult:
     """Analyze `binary_path` (ELF or DOL) and dump a content-addressed cache.
 
@@ -140,6 +141,7 @@ def run_analysis(
         callgraph_json=cache_dir / "callgraph.json",
         strings_json=cache_dir / "strings.json",
         entry_points_json=cache_dir / "entry_points.json",
+        on_detail=on_detail,
     )
     sentinel.write_text(binary_sha1)
     meta = {
@@ -167,15 +169,22 @@ def _run_pyghidra(
     callgraph_json: Path,
     strings_json: Path,
     entry_points_json: Path,
+    on_detail: object | None = None,
 ) -> int:
+    def _detail(msg: str) -> None:
+        if callable(on_detail):
+            on_detail(msg)
+
     # Lazy import — pyghidra.start() spins up the JVM, slow on first call.
     import pyghidra
 
+    _detail("starting JVM...")
     pyghidra.start()
 
     from ghidra.app.decompiler import DecompInterface
     from ghidra.util.task import ConsoleTaskMonitor
 
+    _detail(f"loading {binary_path.name} into Ghidra...")
     with pyghidra.open_program(
         binary_path,
         project_location=str(project_dir),
@@ -183,8 +192,14 @@ def _run_pyghidra(
         analyze=True,
     ) as flat_api:
         program = flat_api.getCurrentProgram()
+        lang = str(program.getLanguage().getLanguageDescription().getDescription())
+        compiler = str(program.getCompilerSpec().getCompilerSpecDescription().getCompilerSpecName())
+        _detail(f"auto-analysis complete — language: {lang}, compiler: {compiler}")
+
         listing = program.getListing()
         funcs = list(program.getFunctionManager().getFunctions(True))
+        total = len(funcs)
+        _detail(f"found {total:,} functions — starting decompilation")
 
         decompiler = DecompInterface()
         decompiler.openProgram(program)
@@ -197,7 +212,11 @@ def _run_pyghidra(
         # with whatever Ghidra auto-named them at analysis time).
         name_by_addr = {f"{int(f.getEntryPoint().getOffset()):08x}": str(f.getName()) for f in funcs}
 
-        for f in funcs:
+        for idx, f in enumerate(funcs):
+            # Report progress every 100 functions or for the first and last
+            if idx % 100 == 0 or idx == total - 1:
+                _detail(f"decompiling {idx + 1:,}/{total:,}: {str(f.getName())}")
+
             addr = int(f.getEntryPoint().getOffset())
             name = str(f.getName())
             size = int(f.getBody().getNumAddresses())
@@ -228,6 +247,7 @@ def _run_pyghidra(
             (decomp_dir / f"{addr_hex}.txt").write_text(code)
 
         decompiler.dispose()
+        _detail(f"decompilation complete — writing {total:,} functions + call graph")
 
         functions_json.write_text(json.dumps({"functions": entries}, indent=2))
         callgraph_json.write_text(json.dumps(callgraph, indent=2))
@@ -235,6 +255,7 @@ def _run_pyghidra(
         # Defined strings + xrefs into them. We tag each xref with the
         # containing function (if any) so the agent can jump straight from
         # a string hit to a code site.
+        _detail("extracting strings + cross-references...")
         strings_out: list[dict[str, object]] = []
         ref_mgr = program.getReferenceManager()
         fm = program.getFunctionManager()
@@ -268,10 +289,12 @@ def _run_pyghidra(
                     seen.add(x)
                     uniq.append(x)
             strings_out.append({"addr": f"{saddr:08x}", "text": text, "xrefs": uniq})
+        _detail(f"found {len(strings_out):,} referenced strings")
         strings_json.write_text(json.dumps({"strings": strings_out}, indent=2))
 
         # Entry points = anywhere the loader marked external entry, plus the
         # symbol-table entry if defined.
+        _detail("extracting entry points...")
         entry_addrs: list[str] = []
         for ep in program.getSymbolTable().getExternalEntryPointIterator():
             ep_hex = f"{int(ep.getOffset()):08x}"

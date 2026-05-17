@@ -92,5 +92,18 @@ ENV _JAVA_OPTIONS="-Xmx4g"
 
 EXPOSE 7860 7575
 
-ENTRYPOINT ["uv", "run"]
+# Install gosu for clean privilege drop in entrypoint.
+USER root
+RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+
+# Entrypoint runs as root to fix bind-mount permissions, then drops to UID 1000.
+# Fresh `docker compose up` creates host dirs as root; this makes them writable.
+COPY <<'EOF' /app/entrypoint.sh
+#!/bin/sh
+chown -R 1000:1000 /app/sessions /app/cache /app/logs 2>/dev/null || true
+exec gosu 1000:1000 uv run "$@"
+EOF
+RUN chmod +x /app/entrypoint.sh
+
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["daywater-web"]

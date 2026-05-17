@@ -42,7 +42,15 @@ def _save_settings(settings: dict[str, str]) -> None:
     import json
 
     _SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _SETTINGS_PATH.write_text(json.dumps(settings, indent=2))
+    # Write via temp file for atomicity; also works around stale permissions
+    # by creating a new inode rather than overwriting.
+    tmp = _SETTINGS_PATH.with_suffix(".tmp")
+    try:
+        tmp.write_text(json.dumps(settings, indent=2))
+        tmp.replace(_SETTINGS_PATH)
+    except PermissionError:
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def _apply_settings_to_env() -> None:
@@ -949,6 +957,8 @@ async def get_settings() -> dict:  # type: ignore[type-arg]
         "openai_api_key_set": bool(key),
         "openai_api_key_preview": f"...{key[-6:]}" if len(key) > 6 else ("***" if key else ""),
         "model": settings.get("model", ""),
+        "setup_complete": settings.get("setup_complete", False),
+        "ghidra_initialized": settings.get("ghidra_initialized", False),
     }
 
 
@@ -978,6 +988,80 @@ async def update_settings(body: dict) -> dict[str, bool]:  # type: ignore[type-a
             os.environ.pop("INSPECT_EVAL_MODEL", None)
 
     _save_settings(settings)
+    return {"ok": True}
+
+
+# ── Setup wizard ───────────────────────────────────────────────────── #
+
+
+@app.post("/api/setup/test-key")
+async def test_api_key(body: dict) -> dict:  # type: ignore[type-arg]
+    """Test an API key by making a minimal inference call."""
+    import os
+
+    key = body.get("openai_api_key", "").strip()
+    model = body.get("model", "openai/gpt-5.5").strip()
+
+    if not key:
+        return {"ok": False, "error": "No API key provided"}
+
+    # Set key temporarily for the test
+    old_key = os.environ.get("OPENAI_API_KEY")
+    os.environ["OPENAI_API_KEY"] = key
+
+    try:
+        import openai
+
+        client = openai.OpenAI(api_key=key)
+        client.models.list()
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    finally:
+        if old_key is not None:
+            os.environ["OPENAI_API_KEY"] = old_key
+        elif "OPENAI_API_KEY" in os.environ:
+            del os.environ["OPENAI_API_KEY"]
+
+
+@app.post("/api/setup/init-ghidra")
+async def init_ghidra(background_tasks: BackgroundTasks) -> dict[str, bool]:
+    """Start Ghidra JVM initialization in the background."""
+    from src.web.runner import run_ghidra_init
+
+    async def _init() -> None:
+        try:
+            await run_ghidra_init()
+            # Mark ghidra as initialized in settings
+            settings = _load_settings()
+            settings["ghidra_initialized"] = True
+            _save_settings(settings)
+        except Exception:
+            pass
+
+    background_tasks.add_task(_init)
+    return {"ok": True}
+
+
+@app.get("/api/setup/init-ghidra/events")
+async def ghidra_init_events() -> StreamingResponse:
+    """SSE stream of Ghidra init progress."""
+    from src.web.runner import stream_ghidra_init_events
+
+    return StreamingResponse(
+        stream_ghidra_init_events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@app.post("/api/setup/complete")
+async def complete_setup() -> dict[str, bool]:
+    """Mark setup as complete."""
+    settings = _load_settings()
+    settings["setup_complete"] = True
+    _save_settings(settings)
+    _apply_settings_to_env()
     return {"ok": True}
 
 

@@ -28,11 +28,15 @@
             </div>
             <div style="margin-bottom:0.6rem;">
               <label style="font-size:0.75rem; display:block; margin-bottom:0.2rem;">Model</label>
-              <input type="text" id="settings-model" placeholder="openai/gpt-4o" style="width:100%; font-family:inherit; font-size:0.78rem; background:var(--bg); color:var(--text); border:1px solid var(--border); padding:0.35rem 0.5rem;">
-              <div style="font-size:0.65rem; color:var(--text-dim); margin-top:0.15rem;">e.g. openai/gpt-4o, openai/gpt-5.5, anthropic/claude-sonnet-4-5-20250514</div>
+              <input type="text" id="settings-model" placeholder="openai/gpt-5.5" style="width:100%; font-family:inherit; font-size:0.78rem; background:var(--bg); color:var(--text); border:1px solid var(--border); padding:0.35rem 0.5rem;">
+              <div style="font-size:0.65rem; color:var(--text-dim); margin-top:0.15rem;">e.g. openai/gpt-5.5, openai/gpt-5.5, anthropic/claude-sonnet-4-5-20250514</div>
             </div>
-            <button onclick="saveSettings()" style="font-size:0.72rem; padding:0.25rem 0.6rem;">Save</button>
-            <span id="settings-saved" style="font-size:0.68rem; color:var(--green); margin-left:0.5rem;" hidden>saved</span>
+            <div style="display:flex; align-items:center; gap:0.5rem;">
+              <button onclick="saveSettings()" style="font-size:0.72rem; padding:0.25rem 0.6rem;">Save</button>
+              <span id="settings-saved" style="font-size:0.68rem; color:var(--green); margin-left:0.5rem;" hidden>saved</span>
+              <span style="flex:1;"></span>
+              <a href="#/setup" onclick="_setupComplete=true" style="font-size:0.65rem; color:var(--text-dim);">Re-run Setup</a>
+            </div>
           </div>
         </div>
         <div style="position:relative;">
@@ -51,6 +55,92 @@
 
   <main>
     <nav class="breadcrumb" id="breadcrumb"></nav>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- VIEW: Setup Wizard                                             -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <div id="view-setup" class="view">
+      <div class="setup-container">
+        <div class="setup-header">
+          <h1 class="setup-title">DAYWATER</h1>
+          <p class="setup-sub">// first-launch initialization</p>
+        </div>
+
+        <!-- Step indicators -->
+        <div class="setup-steps-bar">
+          <span class="setup-step-dot active" id="setup-dot-1">1</span>
+          <span class="setup-step-line"></span>
+          <span class="setup-step-dot" id="setup-dot-2">2</span>
+          <span class="setup-step-line"></span>
+          <span class="setup-step-dot" id="setup-dot-3">3</span>
+        </div>
+
+        <!-- Step 1: API Credentials -->
+        <div id="setup-step-1" class="setup-step">
+          <h2 class="setup-step-title">Link Inference Backend</h2>
+          <p class="setup-step-desc">Configure which LLM the agent uses for reverse engineering tasks.</p>
+
+          <div class="setup-field">
+            <label class="setup-label">API Key</label>
+            <div style="display:flex; gap:0.4rem;">
+              <input type="password" id="setup-api-key" placeholder="sk-..." class="setup-input" style="flex:1;">
+              <button onclick="toggleSetupKeyVis()" id="setup-key-vis" style="padding:0.3rem 0.5rem; font-size:0.72rem;">show</button>
+            </div>
+          </div>
+
+          <div class="setup-field">
+            <label class="setup-label">Model</label>
+            <input type="text" id="setup-model" value="openai/gpt-5.5" class="setup-input" style="width:100%;">
+            <span class="setup-field-hint">e.g. openai/gpt-5.5, openai/gpt-5.5, anthropic/claude-sonnet-4-5-20250514</span>
+          </div>
+
+          <div style="display:flex; gap:0.75rem; align-items:center; margin-top:1rem;">
+            <button onclick="testSetupKey()" id="setup-test-btn">Test Connection</button>
+            <span id="setup-test-result" class="setup-test-result"></span>
+          </div>
+
+          <div style="margin-top:1.5rem; display:flex; justify-content:flex-end;">
+            <button onclick="goSetupStep(2)" id="setup-next-1" class="primary" disabled>Next</button>
+          </div>
+        </div>
+
+        <!-- Step 2: Ghidra Initialization -->
+        <div id="setup-step-2" class="setup-step" hidden>
+          <h2 class="setup-step-title">Initialize Analysis Engine</h2>
+          <p class="setup-step-desc">Start Ghidra's JVM and verify the analysis engine is ready. Watch the log below for progress.</p>
+
+          <button onclick="startGhidraInit()" id="setup-ghidra-btn" class="primary" style="margin-bottom:0.75rem;">Initialize Ghidra</button>
+
+          <div id="setup-ghidra-log" class="setup-terminal" hidden>
+            <pre id="setup-ghidra-log-content"></pre>
+          </div>
+
+          <div id="setup-ghidra-progress" hidden style="margin-top:0.5rem;">
+            <div class="progress-bar" style="height:3px;">
+              <div class="progress-fill" id="setup-ghidra-progress-fill" style="width:0%;"></div>
+            </div>
+            <span id="setup-ghidra-phase" class="setup-phase-text"></span>
+          </div>
+
+          <div style="margin-top:1.5rem; display:flex; justify-content:flex-end;">
+            <button onclick="goSetupStep(3)" id="setup-next-2" class="primary" disabled>Next</button>
+          </div>
+        </div>
+
+        <!-- Step 3: Done -->
+        <div id="setup-step-3" class="setup-step" hidden>
+          <h2 class="setup-step-title">Ready</h2>
+          <p class="setup-step-desc">Daywater is initialized. API key configured, Ghidra JVM running.</p>
+
+          <div class="setup-done-summary">
+            <div class="setup-done-row"><span class="setup-done-check">OK</span> API key configured</div>
+            <div class="setup-done-row"><span class="setup-done-check">OK</span> Ghidra analysis engine initialized</div>
+          </div>
+
+          <button onclick="completeSetupWizard()" class="primary" style="margin-top:1.5rem; font-size:0.9rem; padding:0.5rem 2rem;">Enter Daywater</button>
+        </div>
+      </div>
+    </div>
 
     <!-- ═══════════════════════════════════════════════════════════════ -->
     <!-- VIEW: Dashboard                                                -->
@@ -340,6 +430,7 @@
           </div>
 
           <div class="ss-upload">
+            <p class="hint" style="margin-bottom:0.4rem;">Savestates must be from <a href="https://dolphin-emu.org/download/release/2603a/" target="_blank">Dolphin 2603a</a> — other versions will not work.</p>
             <div style="display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap;">
               <input type="file" id="savestate-file-input" accept=".s01,.s02,.s03,.s04,.s05,.s06,.s07,.s08,.sav" />
               <input type="text" id="savestate-name-input" placeholder="Name (optional)" style="width:160px;" />
@@ -469,9 +560,22 @@
 
     // ── Router ─────────────────────────────────────────────────────── //
 
+    let _setupComplete = null; // null = not checked yet
+
     function router() {
       const hash = location.hash || '#/';
       document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+
+      // Force setup wizard if not completed
+      if (_setupComplete === false && hash !== '#/setup') {
+        location.hash = '#/setup';
+        return;
+      }
+
+      if (hash === '#/setup') {
+        document.getElementById('view-setup').classList.add('active');
+        return;
+      }
 
       const projectMatch = hash.match(/^#\/project\/([a-f0-9]+)$/);
       const taskMatch = hash.match(/^#\/project\/([a-f0-9]+)\/task\/([a-f0-9]+)$/);
@@ -712,6 +816,10 @@
 
     async function loadProject() {
       _discContentsLoaded = false;
+      // Close any SSE stream from a previous project's survey
+      if (_surveyES) { _surveyES.close(); _surveyES = null; }
+      const surveyEl = document.getElementById('project-survey-status');
+      if (surveyEl) { surveyEl.hidden = true; surveyEl.innerHTML = ''; }
       // Collapse disc contents so stale tree from another project doesn't show
       const dcEl = document.getElementById('disc-contents');
       if (dcEl) { dcEl.hidden = true; }
@@ -986,37 +1094,68 @@
       }
     }
 
-    async function pollProjectSurvey() {
+    let _surveyES = null;
+
+    function pollProjectSurvey() {
       const surveyEl = document.getElementById('project-survey-status');
       surveyEl.hidden = false;
-      surveyEl.innerHTML = '<span class="spinner-inline"></span> Ghidra binary analysis starting...';
+      surveyEl.innerHTML = `
+        <div style="margin-bottom:0.4rem;">
+          <span class="spinner-inline"></span>
+          <span id="survey-status-text">Ghidra binary analysis starting...</span>
+        </div>
+        <div class="setup-terminal" id="survey-log" style="max-height:200px;">
+          <pre id="survey-log-content"></pre>
+        </div>
+      `;
 
-      const poll = async () => {
-        if (!currentProjectId) return;
-        try {
-          const p = await api('GET', `/api/projects/${currentProjectId}`);
-          if (p.survey_complete) {
-            surveyEl.innerHTML = `<span style="color:var(--green);">analysis complete: ${p.survey_binaries_done} binaries analyzed</span>`;
-            surveyEl.classList.add('success');
-            loadProject();
-            return;
-          }
-          const done = p.survey_binaries_done || 0;
-          const total = p.survey_binaries_total || '?';
-          const pct = total !== '?' && total > 0 ? Math.round((done / total) * 100) : 0;
-          surveyEl.innerHTML = `
-            <span class="spinner-inline"></span>
-            Analyzing binaries: ${done}/${total}
-            ${total !== '?' ? `<span style="display:inline-block; width:80px; height:4px; background:var(--border); margin-left:0.5rem; vertical-align:middle; border-radius:2px;">
-              <span style="display:block; width:${pct}%; height:100%; background:var(--green); border-radius:2px; transition:width 0.3s;"></span>
-            </span> ${pct}%` : ''}
-          `;
-          setTimeout(poll, 2000);
-        } catch {
-          setTimeout(poll, 3000);
+      // Connect to project event stream for real-time detail
+      if (_surveyES) _surveyES.close();
+      _surveyES = new EventSource(`/api/projects/${currentProjectId}/events`);
+
+      const statusText = document.getElementById('survey-status-text');
+      const logContent = document.getElementById('survey-log-content');
+      const logEl = document.getElementById('survey-log');
+
+      _surveyES.onmessage = (e) => {
+        let evt;
+        try { evt = JSON.parse(e.data); } catch { return; }
+
+        if (evt.t === 'survey_progress') {
+          const pct = evt.total > 0 ? Math.round((evt.done / evt.total) * 100) : 0;
+          statusText.innerHTML = `Analyzing binaries: ${evt.done}/${evt.total} (${pct}%) — ${evt.label}`;
+        }
+
+        if (evt.t === 'survey_detail') {
+          logContent.textContent += evt.msg + '\n';
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        if (evt.t === 'survey_done') {
+          _surveyES.close();
+          _surveyES = null;
+          surveyEl.innerHTML = `<span style="color:var(--green);">analysis complete: ${evt.binaries} binaries analyzed</span>`;
+          loadProject();
+        }
+
+        if (evt.t === 'survey_error') {
+          logContent.textContent += '!! ' + evt.error + '\n';
+          logEl.scrollTop = logEl.scrollHeight;
         }
       };
-      poll();
+
+      _surveyES.onerror = () => {
+        // Fallback: poll if SSE drops
+        if (_surveyES) { _surveyES.close(); _surveyES = null; }
+        setTimeout(async () => {
+          if (!currentProjectId) return;
+          try {
+            const p = await api('GET', `/api/projects/${currentProjectId}`);
+            if (p.survey_complete) { loadProject(); }
+            else { pollProjectSurvey(); }
+          } catch { /* retry later */ }
+        }, 3000);
+      };
     }
 
     // ── New Task Creator ─────────────────────────────────────────── //
@@ -1543,6 +1682,158 @@
       } else {
         el.hidden = true;
         if (icon) icon.textContent = '+';
+      }
+    }
+
+    // ── Setup Wizard ──────────────────────────────────────────────────── //
+
+    function toggleSetupKeyVis() {
+      const input = document.getElementById('setup-api-key');
+      const btn = document.getElementById('setup-key-vis');
+      if (input.type === 'password') { input.type = 'text'; btn.textContent = 'hide'; }
+      else { input.type = 'password'; btn.textContent = 'show'; }
+    }
+
+    async function testSetupKey() {
+      const key = document.getElementById('setup-api-key').value.trim();
+      const model = document.getElementById('setup-model').value.trim();
+      const resultEl = document.getElementById('setup-test-result');
+      const btn = document.getElementById('setup-test-btn');
+
+      if (!key) { resultEl.textContent = 'enter a key first'; resultEl.className = 'setup-test-result error'; return; }
+
+      btn.disabled = true;
+      resultEl.textContent = 'testing...';
+      resultEl.className = 'setup-test-result pending';
+
+      try {
+        const res = await api('POST', '/api/setup/test-key', { openai_api_key: key, model: model || 'openai/gpt-5.5' });
+        if (res.ok) {
+          resultEl.textContent = 'CONNECTED';
+          resultEl.className = 'setup-test-result ok';
+          // Save key + model to settings
+          await api('POST', '/api/settings', { openai_api_key: key, model: model });
+          document.getElementById('setup-next-1').disabled = false;
+        } else {
+          resultEl.textContent = res.error || 'connection failed';
+          resultEl.className = 'setup-test-result error';
+        }
+      } catch (e) {
+        resultEl.textContent = e.message;
+        resultEl.className = 'setup-test-result error';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function goSetupStep(step) {
+      // Hide all steps
+      document.querySelectorAll('.setup-step').forEach(s => s.hidden = true);
+      document.getElementById(`setup-step-${step}`).hidden = false;
+
+      // Update dots
+      document.querySelectorAll('.setup-step-dot').forEach((d, i) => {
+        d.classList.toggle('active', i + 1 <= step);
+        d.classList.toggle('done', i + 1 < step);
+      });
+    }
+
+    let _ghidraInitES = null;
+
+    function startGhidraInit() {
+      const btn = document.getElementById('setup-ghidra-btn');
+      const logEl = document.getElementById('setup-ghidra-log');
+      const logContent = document.getElementById('setup-ghidra-log-content');
+      const progressEl = document.getElementById('setup-ghidra-progress');
+      const progressFill = document.getElementById('setup-ghidra-progress-fill');
+      const phaseEl = document.getElementById('setup-ghidra-phase');
+
+      btn.disabled = true;
+      btn.textContent = 'Initializing...';
+      logEl.hidden = false;
+      progressEl.hidden = false;
+      logContent.textContent = '';
+
+      // Kick off the init
+      api('POST', '/api/setup/init-ghidra').catch(() => {});
+
+      // Connect to SSE stream
+      if (_ghidraInitES) _ghidraInitES.close();
+      _ghidraInitES = new EventSource('/api/setup/init-ghidra/events');
+
+      let lineCount = 0;
+      const phases = {
+        'jvm_start': { pct: 10, label: 'Starting JVM...' },
+        'jvm_ready': { pct: 60, label: 'JVM ready' },
+        'analysis_start': { pct: 70, label: 'Running test analysis...' },
+        'analysis_done': { pct: 95, label: 'Analysis complete' },
+      };
+
+      _ghidraInitES.onmessage = (e) => {
+        let evt;
+        try { evt = JSON.parse(e.data); } catch { return; }
+
+        if (evt.t === 'heartbeat') return;
+
+        // Update progress bar on phase events
+        if (evt.t === 'phase' && phases[evt.phase]) {
+          progressFill.style.width = phases[evt.phase].pct + '%';
+          phaseEl.textContent = phases[evt.phase].label;
+        }
+
+        // Append to terminal log
+        if (evt.msg) {
+          const prefix = evt.t === 'error' ? '!! ' : evt.t === 'phase' ? '>> ' : evt.t === 'jvm_log' ? '   ' : '-- ';
+          logContent.textContent += prefix + evt.msg + '\n';
+          lineCount++;
+          // Auto-scroll
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+
+        // Terminal events
+        if (evt.t === 'done') {
+          _ghidraInitES.close();
+          _ghidraInitES = null;
+
+          if (evt.ok) {
+            progressFill.style.width = '100%';
+            phaseEl.textContent = 'initialization complete';
+            phaseEl.style.color = 'var(--green)';
+            btn.textContent = 'Initialized';
+            document.getElementById('setup-next-2').disabled = false;
+            logContent.textContent += '\n>> initialization complete\n';
+          } else {
+            phaseEl.textContent = 'initialization failed';
+            phaseEl.style.color = 'var(--red)';
+            btn.disabled = false;
+            btn.textContent = 'Retry';
+          }
+        }
+
+        if (evt.t === 'error') {
+          phaseEl.textContent = evt.msg;
+          phaseEl.style.color = 'var(--red)';
+        }
+      };
+
+      _ghidraInitES.onerror = () => {
+        // SSE connection lost — check if it completed
+        setTimeout(() => {
+          if (_ghidraInitES) {
+            _ghidraInitES.close();
+            _ghidraInitES = null;
+          }
+        }, 3000);
+      };
+    }
+
+    async function completeSetupWizard() {
+      try {
+        await api('POST', '/api/setup/complete');
+        _setupComplete = true;
+        location.hash = '#/';
+      } catch (e) {
+        alert('Failed to complete setup: ' + e.message);
       }
     }
 
@@ -2219,7 +2510,17 @@
     }
 
     // ── Init ───────────────────────────────────────────────────────── //
-    router();
+
+    // Check setup status before first route
+    (async () => {
+      try {
+        const settings = await api('GET', '/api/settings');
+        _setupComplete = !!settings.setup_complete;
+      } catch {
+        _setupComplete = true; // If settings fail, don't block the app
+      }
+      router();
+    })();
   </script>
 </body>
 </html>

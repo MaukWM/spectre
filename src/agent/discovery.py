@@ -47,6 +47,7 @@ def survey_and_analyze(
     *,
     extras: list[Path] | None = None,
     on_progress: object | None = None,
+    on_detail: object | None = None,
 ) -> list[BinaryCandidate]:
     """Extract + Ghidra-analyze every executable in the ISO.
 
@@ -90,7 +91,7 @@ def survey_and_analyze(
     try:
         if not dol_path.exists():
             extract_dol(iso_path, dol_path)
-        res = run_analysis(dol_path)
+        res = run_analysis(dol_path, on_detail=on_detail)
         if res.sha1 not in seen_sha:
             seen_sha.add(res.sha1)
             out.append(
@@ -130,7 +131,7 @@ def survey_and_analyze(
                 if patch_elf_machine_ppc(target):
                     logger.info("elf_machine_patched_to_ppc", path=str(target))
                     notes.append("e_machine patched EM_NONE → EM_PPC")
-            res = run_analysis(target)
+            res = run_analysis(target, on_detail=on_detail)
         except Exception as exc:  # noqa: BLE001
             logger.warning("survey_candidate_failed", path=f.path, error=str(exc))
             analyzed_count += 1
@@ -161,7 +162,7 @@ def survey_and_analyze(
             logger.warning("survey_extra_missing", path=str(p))
             continue
         try:
-            res = run_analysis(p)
+            res = run_analysis(p, on_detail=on_detail)
         except Exception as exc:  # noqa: BLE001
             logger.warning("survey_extra_failed", path=str(p), error=str(exc))
             analyzed_count += 1
