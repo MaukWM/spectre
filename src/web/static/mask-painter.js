@@ -238,6 +238,32 @@ function setZoom(z) {
   });
 }
 
+// ── Load existing mask ───────────────────────────────────────────────── //
+
+function loadMaskFromUrl(maskUrl) {
+  const img = new Image();
+  img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    maskCtx.drawImage(img, 0, 0, CANVAS_W, CANVAS_H);
+    pushUndo();
+    render();
+  };
+  img.src = maskUrl;
+}
+
+// ── Read-only mode (for finished tasks) ──────────────────────────────── //
+
+function setMaskReadOnly(readOnly) {
+  if (!canvas) return;
+  if (readOnly) {
+    canvas.removeEventListener('mousedown', onMouseDown);
+    canvas.removeEventListener('mousemove', onMouseMove);
+    canvas.removeEventListener('mouseup', onMouseUp);
+    canvas.removeEventListener('mouseleave', onMouseUp);
+    canvas.style.cursor = 'default';
+  }
+}
+
 // ── Export ────────────────────────────────────────────────────────────── //
 
 function exportMask() {

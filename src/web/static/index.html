@@ -218,8 +218,6 @@
             <button id="brush-btn" class="tool-btn active" onclick="setTool('brush')">Brush</button>
             <button id="eraser-btn" class="tool-btn" onclick="setTool('eraser')">Eraser</button>
             <label>Size: <input type="range" id="brush-size" min="4" max="80" value="20" oninput="updateBrushSize(this.value)"> <span id="brush-size-label">20</span>px</label>
-            <button onclick="maskUndo()">Undo</button>
-            <button onclick="maskRedo()">Redo</button>
             <button onclick="maskClear()">Clear</button>
             <span class="spacer"></span>
             <label>Zoom: </label>
@@ -475,13 +473,12 @@
             <div id="kb-summary" style="padding:0.4rem 0; font-size:0.8rem; color:var(--text-dim);"></div>
           </div>
 
-          <!-- Disc Contents -->
+          <!-- Disc Contents (always visible) -->
           <div class="proj-section">
-            <div class="proj-section-header" onclick="toggleSection('disc-contents')">
+            <div class="proj-section-header">
               <h2>Disc Contents</h2>
-              <span class="toggle-icon" id="disc-contents-icon">+</span>
             </div>
-            <div id="disc-contents" class="proj-section-body" hidden>
+            <div id="disc-contents" class="proj-section-body">
               <div id="disc-summary" style="font-size:0.78rem; color:var(--text-dim); margin-bottom:0.6rem;"></div>
               <div id="disc-tree" class="dc-tree"></div>
             </div>
@@ -502,7 +499,7 @@
       </div>
     </div>
 
-    <div style="padding:0.75rem 1.5rem 0.75rem 2rem; flex-shrink:0;">
+    <div style="padding:0.75rem 1.5rem 0 2rem; flex-shrink:0; border-bottom:1px solid var(--border);">
       <button class="kb-tab active" onclick="switchKbTab('research')" id="kb-tab-research">Research</button>
       <button class="kb-tab" onclick="switchKbTab('gecko-codes')" id="kb-tab-gecko-codes">Gecko Codes</button>
       <button class="kb-tab" onclick="switchKbTab('annotations')" id="kb-tab-annotations">Annotations</button>
@@ -657,6 +654,21 @@
       if (status && text) status.textContent = text;
     }
 
+    function freezeTask() {
+      // Make all interactive elements in the task view read-only
+      document.querySelectorAll('#view-task button:not(.danger)').forEach(el => {
+        if (el.closest('#step-results')) return; // keep result buttons
+        if (el.closest('.breadcrumb')) return;
+        if (el.textContent.trim() === 'Open') return; // keep KB link
+        el.hidden = true;
+      });
+      document.querySelectorAll('#view-task input, #view-task textarea, #view-task select').forEach(el => {
+        el.disabled = true;
+      });
+      document.querySelectorAll('#view-task .mask-toolbar').forEach(el => el.hidden = true);
+      if (typeof setMaskReadOnly === 'function') setMaskReadOnly(true);
+    }
+
     function resetSteps() {
       document.querySelectorAll('#view-task .step').forEach(s => {
         s.classList.remove('completed', 'active');
@@ -722,10 +734,10 @@
           const survey = p.survey_complete
             ? `<span class="status-tag ready">${p.survey_binaries_done} binaries</span>`
             : `<span class="status-tag analyzing">analyzing...</span>`;
-          return `<li>
-            <span class="cursor" onclick="location.hash='#/project/${p.project_id}'">&gt;</span>
-            <span class="game-id" onclick="location.hash='#/project/${p.project_id}'">${p.name || p.game_id || '...'}</span>
-            <span class="meta" onclick="location.hash='#/project/${p.project_id}'">${p.iso_sha1 ? p.iso_sha1.slice(0, 8) : ''} &middot; ${timeAgo(p.created_at)}</span>
+          return `<li onclick="location.hash='#/project/${p.project_id}'" style="cursor:pointer;">
+            <span class="cursor">&gt;</span>
+            <span class="game-id">${p.name || p.game_id || '...'}</span>
+            <span class="meta">${p.iso_sha1 ? p.iso_sha1.slice(0, 8) : ''} &middot; ${timeAgo(p.created_at)}</span>
             ${survey}
             <button class="danger delete-btn" onclick="event.stopPropagation(); deleteProject('${p.project_id}')">x</button>
           </li>`;
@@ -840,11 +852,9 @@
       if (_surveyES) { _surveyES.close(); _surveyES = null; }
       const surveyEl = document.getElementById('project-survey-status');
       if (surveyEl) { surveyEl.hidden = true; surveyEl.innerHTML = ''; }
-      // Collapse disc contents so stale tree from another project doesn't show
-      const dcEl = document.getElementById('disc-contents');
-      if (dcEl) { dcEl.hidden = true; }
-      const dcIcon = document.getElementById('disc-contents-icon');
-      if (dcIcon) { dcIcon.textContent = '+'; }
+      // Clear stale disc contents from previous project (will be reloaded)
+      const dcTree = document.getElementById('disc-tree');
+      if (dcTree) { dcTree.innerHTML = ''; }
       // Use the project-local breadcrumb
       const projBc = document.getElementById('proj-breadcrumb');
       projBc.innerHTML = [
@@ -888,6 +898,9 @@
         // Load savestates.
         loadSavestates();
 
+        // Load disc contents (always visible).
+        loadDiscContents();
+
         // Load controller mapping.
         loadControllerMapping();
 
@@ -922,10 +935,12 @@
         try {
           const kb = await api('GET', `/api/projects/${currentProjectId}/knowledge`);
           const res = await api('GET', `/api/projects/${currentProjectId}/research`);
+          const gcc = await api('GET', `/api/projects/${currentProjectId}/gecko-codes`);
           const counts = [];
           if (kb.findings.length) counts.push(`${kb.findings.length} findings`);
           if (kb.renames.length) counts.push(`${kb.renames.length} renames`);
           if (res.docs.length) counts.push(`${res.docs.length} research docs`);
+          if (gcc.codes.length) counts.push(`${gcc.codes.length} gecko codes`);
           document.getElementById('kb-summary').textContent = counts.length
             ? counts.join(' · ')
             : 'No knowledge yet';
@@ -1547,9 +1562,9 @@
           const findingsTag = s.findings_count
             ? `<span class="status-tag ready">${s.findings_count} findings</span>`
             : '';
-          return `<li>
-            <span class="cursor" onclick="expandSavestate('${s.savestate_id}')">&gt;</span>
-            <span class="task-type" onclick="expandSavestate('${s.savestate_id}')">${name}</span>
+          return `<li onclick="expandSavestate('${s.savestate_id}')" style="cursor:pointer;">
+            <span class="cursor">&gt;</span>
+            <span class="task-type">${name}</span>
             <span class="meta">${timeAgo(s.created_at)}${notes}</span>
             ${screenshotTag}
             ${findingsTag}
@@ -2098,15 +2113,34 @@
 
     // ── Settings panel ──────────────────────────────────────────────── //
 
+    function closeAllPanels() {
+      document.getElementById('settings-panel').hidden = true;
+      document.getElementById('proc-panel').hidden = true;
+    }
+
     function toggleSettingsPanel() {
       const panel = document.getElementById('settings-panel');
-      if (panel.hidden) {
+      const wasHidden = panel.hidden;
+      closeAllPanels();
+      if (wasHidden) {
         panel.hidden = false;
         loadSettings();
-      } else {
-        panel.hidden = true;
       }
     }
+
+    // Close panels on click outside
+    document.addEventListener('click', (e) => {
+      const settingsBtn = document.querySelector('[onclick*="toggleSettingsPanel"]');
+      const procBtn = document.querySelector('[onclick*="toggleProcessPanel"]');
+      const settingsPanel = document.getElementById('settings-panel');
+      const procPanel = document.getElementById('proc-panel');
+      if (!settingsPanel.hidden && !settingsPanel.contains(e.target) && !settingsBtn.contains(e.target)) {
+        settingsPanel.hidden = true;
+      }
+      if (!procPanel.hidden && !procPanel.contains(e.target) && !procBtn.contains(e.target)) {
+        procPanel.hidden = true;
+      }
+    });
 
     async function loadSettings() {
       try {
@@ -2165,11 +2199,11 @@
 
     function toggleProcessPanel() {
       const panel = document.getElementById('proc-panel');
-      if (panel.hidden) {
+      const wasHidden = panel.hidden;
+      closeAllPanels();
+      if (wasHidden) {
         panel.hidden = false;
         refreshProcesses();
-      } else {
-        panel.hidden = true;
       }
     }
 
@@ -2264,6 +2298,7 @@
             unlockStep('step-run');
             completeStep('step-run', state);
             loadResults();
+            freezeTask();
           }
           return;
         }
@@ -2293,6 +2328,7 @@
             unlockStep('step-run');
             completeStep('step-run', state);
             loadResults();
+            freezeTask();
           }
           return;
         }
@@ -2317,6 +2353,11 @@
         unlockStep('step-mask');
         initMaskPainter(`/api/projects/${currentProjectId}/tasks/${currentTaskId}/files/reference.png`);
 
+        // Load saved mask if it exists (revisiting a task that already has a mask)
+        if (t.has_mask) {
+          loadMaskFromUrl(`/api/projects/${currentProjectId}/tasks/${currentTaskId}/files/mask.png`);
+        }
+
         if (state === 'frame_ready') return;
 
         completeStep('step-mask', 'submitted');
@@ -2334,6 +2375,7 @@
         if (state === 'done' || state === 'failed') {
           completeStep('step-run', state);
           loadResults();
+          freezeTask();
         }
 
       } catch (e) {
