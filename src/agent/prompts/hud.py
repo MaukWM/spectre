@@ -45,24 +45,26 @@ given address: `04XXXXXX YYYYYYYY` writes word `YYYYYYYY` to address \
 The two standard PowerPC patches you'll use:
 
 - **NOP a call site**: replace the `bl <target>` at the call site with \
-  `60000000` (`nop`). The function is never invoked. Address = the \
-  call instruction itself. Local, surgical.
+  a NOP. Use `assemble_ppc("nop")` to get the hex (`60000000`). \
+  The function is never invoked. Address = the call instruction itself. \
+  Local, surgical.
 - **BLR a function**: replace the *first instruction* of the target \
-  function with `4E800020` (`blr` — branch-to-link-register / return). \
-  The function returns immediately; the caller doesn't notice. Address \
-  = the function's entry point. Surgical and version-stable.
+  function with a BLR. Use `assemble_ppc("blr")` to get the hex \
+  (`4E800020`). The function returns immediately. Address = the \
+  function's entry point. Surgical and version-stable.
 
 Both leave surrounding code untouched. Prefer them over forward branches \
-(`48000NNN` = `b +NNN`) which skip arbitrary byte counts and break if \
-the compiler rearranges anything.
+which skip arbitrary byte counts and break if the compiler rearranges \
+anything. **Always use `assemble_ppc` to compute instruction hex** — \
+never hand-compute it.
 
 You can submit multiple `$Name` blocks in one call. Each block becomes \
 one entry in `[Gecko_Enabled]` and `[Gecko]`.
 
-**Do not use the Gecko `C0000000` opcode** (execute injected PowerPC \
-code) or any other code-injection opcode. Stick to `04` (32-bit write), \
-`02` (16-bit write), or `00` (8-bit write) at addresses you have a \
-specific reason to believe matter. Do not blast pixel writes into XFB \
+**For HUD removal, stick to `04` (32-bit write), `02` (16-bit write), \
+or `00` (8-bit write)** at addresses you have a specific reason to \
+believe matter. HUD removal should not need C0/C2 code-injection — \
+NOP and BLR patches are sufficient. Do not blast pixel writes into XFB \
 or other framebuffer-region memory hoping to overpaint the HUD — that \
 will move the rendered camera, break the hand/gun render, or just \
 clobber unrelated state.

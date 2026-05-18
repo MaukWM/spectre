@@ -171,6 +171,26 @@ TOOLS_RUNTIME = """\
 - `wait(duration=2.0)` — let the game run with no input for a duration. \
   Useful to let physics settle or observe values at rest."""
 
+TOOLS_PPC_ASM = """\
+### PPC assembly tools (available with Gecko injection)
+
+- `assemble_ppc(asm, base_addr=0x80000000)` — assemble PowerPC instructions \
+  into hex words. Write standard PPC syntax (`mflr r0; stwu r1, -0x40(r1)`) \
+  and get back space-separated hex words (`7C0802A6 9421FFC0`) ready for \
+  Gecko 04-write blocks. Both `r`-prefix (`r3`, `f1`) and bare numeric \
+  register notation are accepted. Set `base_addr` to the actual target \
+  address for correct branch displacement calculation. **Always use this \
+  instead of hand-computing PPC hex** — branch displacement math is the \
+  #1 source of silent Gecko bugs.
+- `make_c2_hook(hook_addr, asm, name="Hook")` — create a complete Gecko C2 \
+  hook. Write ONLY your custom logic in `asm` (no prologue/epilogue, no \
+  return branch). The tool automatically reads the original instruction at \
+  hook_addr from the current binary and prepends it to your body — this is \
+  required because Dolphin's C2 handler skips the hooked instruction. \
+  Make sure you've called `switch_binary()` before using this tool. \
+  Returns a complete `$Name` Gecko block ready for `apply_gecko_code`. \
+  **Use C2 hooks for any patch more complex than a simple NOP/BLR.**"""
+
 TOOLS_SAVESTATE_FINDINGS = """\
 ### Savestate findings (runtime-specific, scoped to this savestate)
 

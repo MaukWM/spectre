@@ -19,8 +19,11 @@ $DescriptiveName
 
 You can submit multiple `$Name` blocks in one call.
 
-**Do not use the Gecko `C0000000` opcode** (execute injected PowerPC \
-code) or any other code-injection opcode. Stick to 04/02/00 writes."""
+**Do not use the Gecko `C0000000` opcode** (execute arbitrary injected \
+PowerPC code without a hook site). For complex patches that need more \
+than a simple NOP/BLR/value-write, use the `make_c2_hook` tool which \
+generates correct C2 (hook-at-address) blocks with proper save/restore \
+and return handling. For simple patches, stick to 04/02/00 writes."""
 
 PATCHING_PATTERNS = """\
 ## Standard PowerPC patch patterns
@@ -34,7 +37,14 @@ PATCHING_PATTERNS = """\
 
 Both leave surrounding code untouched. Prefer them over forward branches \
 (`48000NNN` = `b +NNN`) which skip arbitrary byte counts and break if \
-the compiler rearranges anything."""
+the compiler rearranges anything.
+
+For patches beyond simple NOP/BLR — such as injecting custom logic, \
+modifying a value in-flight, or hooking a function — use the \
+`make_c2_hook` tool. It automatically reads the original instruction from \
+the binary and handles the C2 encoding. **Never hand-compute PowerPC \
+hex.** Use `assemble_ppc` to convert mnemonics to hex, and `make_c2_hook` \
+for any multi-instruction patch."""
 
 ROBUSTNESS = """\
 ## Robustness requirement — MANDATORY
@@ -116,12 +126,16 @@ Only proceed to Step 3 if no built-in debug mode is found.
 
 If there's no built-in debug flag, create a Gecko code targeting \
 GLOBAL/CODE addresses. Good targets:
-- **NOP a collision call**: replace `bl collision_check` with `60000000` \
-  (PowerPC NOP) to skip collision.
+- **NOP a collision call**: use `assemble_ppc("nop")` → `60000000`, \
+  then write a 04-line to skip collision.
 - **NOP a gravity/physics call**: skip gravity so the player floats.
 - **Patch a branch**: change a conditional branch to skip collision/physics.
 - **Force a movement state**: patch the state machine to always enter \
   the fly/noclip state.
+- **Inject custom logic**: use `make_c2_hook(hook_addr, asm)` for complex \
+  patches that need more than a single instruction change.
+
+**Always use `assemble_ppc` for instruction hex** — never hand-compute it.
 
 ### Step 4: Test the code — MANDATORY
 

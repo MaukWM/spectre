@@ -10,6 +10,7 @@ import base64
 import io
 import shutil
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -29,7 +30,7 @@ from src.agent.state import BUDGET_KEY, LAST_PASS_KEY
 from src.agent.tool_builder import build_tools
 from src.dolphin import collect_dump, load_png_frames, parse_gecko, read_game_id, run_dolphin
 from src.dolphin.diff import has_render_glitch, load_image_rgb
-from src.dolphin.runner import write_user_dir
+from src.dolphin.runner import RunResult, write_user_dir
 
 # Max retries when a captured frame has a render glitch (black bar).
 _MAX_GLITCH_RETRIES = 2
@@ -310,28 +311,56 @@ def _submit_description(spec: JobSpec) -> str:
 # ── Dolphin frame capture with glitch retry ────────────────────────────── #
 
 
+@dataclass
+class DolphinRunOutcome:
+    """Result of a Dolphin run attempt, with crash diagnostics."""
+
+    image: Any | None  # RGB numpy array or None
+    crashed: bool = False
+    returncode: int = 0
+    elapsed: float = 0.0
+    run_seconds_budget: int = 0
+
+    @property
+    def crash_detail(self) -> str:
+        """Human-readable crash description for agent-facing messages."""
+        if not self.crashed:
+            return ""
+        if self.returncode != 0 and self.elapsed < self.run_seconds_budget * 0.5:
+            return (
+                f"Dolphin crashed (exit code {self.returncode}) after "
+                f"{self.elapsed:.1f}s — the game never rendered a frame. "
+                f"Your Gecko code likely corrupted execution at the hook site."
+            )
+        return (
+            f"Dolphin produced no frames in {self.elapsed:.1f}s "
+            f"(budget {self.run_seconds_budget}s, exit code {self.returncode}). "
+            f"The game may have crashed or entered an infinite loop before rendering."
+        )
+
+
 def _run_dolphin_with_retry(
     iso_path: Path,
     savestate_path: Path,
     codes: list,  # type: ignore[type-arg]
     run_seconds: int,
     max_retries: int = _MAX_GLITCH_RETRIES,
-) -> Any | None:
+) -> DolphinRunOutcome:
     """Run Dolphin and capture frames, retrying if render glitch detected.
 
-    Returns the candidate frame as an RGB numpy array, or None if no frames.
-    Retries up to ``max_retries`` times if the captured frame has a large
-    contiguous black rectangle (common savestate-load render glitch).
+    Returns a ``DolphinRunOutcome`` with the candidate frame (or None) and
+    crash diagnostics.
     """
     from src.logging import logger
 
+    last_result: RunResult | None = None
     for attempt in range(1 + max_retries):
         tmp_root = Path(tempfile.mkdtemp(prefix="daywater_web_tool_"))
         try:
             user_dir = tmp_root / "user"
             game_id = read_game_id(iso_path)
             write_user_dir(user_dir, game_id, codes)
-            result = run_dolphin(
+            last_result = run_dolphin(
                 user_dir=user_dir,
                 iso=iso_path,
                 log_path=tmp_root / "dolphin.log",
@@ -347,10 +376,22 @@ def _run_dolphin_with_retry(
             frames = load_png_frames(frames_dir)
 
             if not frames:
+                logger.info(
+                    "no_frames",
+                    attempt=attempt + 1,
+                    rc=last_result.returncode,
+                    elapsed=round(last_result.elapsed_seconds, 1),
+                    early_exit=last_result.elapsed_seconds < run_seconds * 0.8,
+                )
                 if attempt < max_retries:
-                    logger.info("frame_retry_no_frames", attempt=attempt + 1)
                     continue
-                return None
+                return DolphinRunOutcome(
+                    image=None,
+                    crashed=True,
+                    returncode=last_result.returncode,
+                    elapsed=last_result.elapsed_seconds,
+                    run_seconds_budget=run_seconds,
+                )
 
             candidate_png = frames[max(frames)]
             candidate_img = load_image_rgb(candidate_png)
@@ -359,15 +400,21 @@ def _run_dolphin_with_retry(
                 # Check if an earlier frame is clean
                 clean_img = _find_clean_frame(frames)
                 if clean_img is not None:
-                    return clean_img
+                    return DolphinRunOutcome(image=clean_img)
                 logger.info("frame_retry_glitch", attempt=attempt + 1)
                 continue
 
-            return candidate_img
+            return DolphinRunOutcome(image=candidate_img)
         finally:
             shutil.rmtree(tmp_root, ignore_errors=True)
 
-    return None
+    return DolphinRunOutcome(
+        image=None,
+        crashed=True,
+        returncode=last_result.returncode if last_result else -1,
+        elapsed=last_result.elapsed_seconds if last_result else 0.0,
+        run_seconds_budget=run_seconds,
+    )
 
 
 def _kill_orphan_dolphin(user_dir: Path) -> None:
@@ -431,15 +478,18 @@ def build_run_gecko_for_task(task: Task, project: Project, spec: JobSpec) -> Too
                 return "Error: no savestate assigned to this task."
             savestate_path = ss.savestate_path
 
-            candidate_img = _run_dolphin_with_retry(
+            outcome = _run_dolphin_with_retry(
                 iso_path, savestate_path, codes, spec.run_seconds,
             )
-            if candidate_img is None:
-                return f"Call {call_idx}/{spec.max_gecko_runs}: no frames produced. ({remaining} remaining)"
+            if outcome.image is None:
+                return (
+                    f"Call {call_idx}/{spec.max_gecko_runs}: {outcome.crash_detail} "
+                    f"({remaining} remaining)"
+                )
 
             mask_score = score_against_mask(
                 reference=load_image_rgb(task.reference_path),
-                candidate=candidate_img,
+                candidate=outcome.image,
                 mask=load_mask(task.mask_path),
                 hud_min_mean=spec.hud_min_mean,
                 preserve_max_mean=spec.preserve_max_mean,
@@ -449,7 +499,7 @@ def build_run_gecko_for_task(task: Task, project: Project, spec: JobSpec) -> Too
                 inspect_store().set(LAST_PASS_KEY, gecko_text)
 
             # Encode frame as data URL for multimodal feedback.
-            img = Image.fromarray(candidate_img)
+            img = Image.fromarray(outcome.image)
             buf = io.BytesIO()
             img.save(buf, format="PNG")
             b64 = base64.b64encode(buf.getvalue()).decode("ascii")

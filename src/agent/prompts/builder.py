@@ -8,6 +8,7 @@ from src.agent.prompts.shared import (
     TOOLS_ANNOTATION,
     TOOLS_BINARY_DISCOVERY,
     TOOLS_FINDINGS,
+    TOOLS_PPC_ASM,
     TOOLS_RESEARCH,
     TOOLS_RUNTIME,
     TOOLS_SAVESTATE_FINDINGS,
@@ -51,6 +52,7 @@ def build_system_prompt(spec: JobSpec, *, controller_mapping: str = "") -> str:
             sections.append(_tools_visual_gecko(spec))
         else:
             sections.append(_tools_interactive_gecko())
+        sections.append(TOOLS_PPC_ASM)
 
     if Capability.RAM_POKE in spec.capabilities or Capability.INPUT_INJECTION in spec.capabilities:
         sections.append(TOOLS_RUNTIME)

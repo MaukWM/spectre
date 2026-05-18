@@ -312,6 +312,14 @@ class DolphinSession:
 
         Returns the process exit code.
         """
+        # When launched via xvfb-run, self.proc is the wrapper and self.pid
+        # is the real dolphin-emu child. Kill the child first to avoid orphans.
+        if self.pid != self.proc.pid:
+            try:
+                os.kill(self.pid, signal.SIGTERM)
+            except OSError:
+                pass  # already dead
+
         if self.proc.poll() is not None:
             rc = self.proc.returncode
         else:
@@ -319,6 +327,12 @@ class DolphinSession:
             try:
                 self.proc.wait(timeout=timeout)
             except subprocess.TimeoutExpired:
+                # Escalate: SIGKILL both child and wrapper
+                if self.pid != self.proc.pid:
+                    try:
+                        os.kill(self.pid, signal.SIGKILL)
+                    except OSError:
+                        pass
                 self.proc.kill()
                 self.proc.wait(timeout=5)
             rc = self.proc.returncode if self.proc.returncode is not None else -1

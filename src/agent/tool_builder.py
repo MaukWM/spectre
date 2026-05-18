@@ -90,7 +90,8 @@ def build_tools(
                 save_gecko_code,
             )
 
-            tools.append(apply_gecko_code(session, iso_path, savestate_path))
+            _gdb_port = 6777 if Capability.RAM_POKE in spec.capabilities else None
+            tools.append(apply_gecko_code(session, iso_path, savestate_path, gdb_port=_gdb_port))
             tools.append(save_gecko_code(task_root))
 
     # Frame capture
@@ -134,6 +135,12 @@ def build_tools(
             wait(session),
             sample_position(session),
         ]
+
+    # PPC assembly helpers — always available alongside gecko injection
+    if Capability.GECKO_INJECTION in spec.capabilities:
+        from src.agent.ppc_tools import assemble_ppc, make_c2_hook
+
+        tools += [assemble_ppc(), make_c2_hook()]
 
     # Knowledge base (always)
     from src.agent.findings_tools import list_findings, save_finding

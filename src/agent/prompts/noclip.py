@@ -3,6 +3,7 @@
 from src.agent.prompts.shared import (
     SUBMISSION_DOCUMENT,
     TOOLS_ALL_STATIC,
+    TOOLS_PPC_ASM,
     TOOLS_RUNTIME,
     TOOLS_SAVESTATE_FINDINGS,
 )
@@ -84,6 +85,8 @@ of the same game, not just the one you're testing with. This means:
 
 {TOOLS_GECKO}
 
+{TOOLS_PPC_ASM}
+
 {TOOLS_ALL_STATIC}
 
 {TOOLS_RUNTIME}
@@ -102,6 +105,9 @@ Gecko codes are written as `TTXXXXXX YYYYYYYY` where TT is the code type:
 - **00** = 8-bit write: `00XXXXXX 000000YY` writes byte YY to 0x80XXXXXX
 - **02** = 16-bit write: `02XXXXXX 0000YYYY` writes halfword YYYY to 0x80XXXXXX
 - **04** = 32-bit write: `04XXXXXX YYYYYYYY` writes word to 0x80XXXXXX
+- **C2** = ASM hook at address: hooks a specific instruction and runs \
+  custom PPC code. **Use the `make_c2_hook` tool** to generate C2 blocks — \
+  it handles save/restore and return automatically.
 
 The address in the code is the LOW 24 bits (strip the `80` prefix). \
 For example, to write 0x01 to 0x8029F7F1: `0029F7F1 00000001`.
@@ -111,6 +117,17 @@ For example, to write 0x01 to 0x8029F7F1: `0029F7F1 00000001`.
 Gecko codes for heap/object addresses (like 0x80B9xxxx) — those change \
 per boot and per savestate. Instead, patch the CODE that controls \
 behavior (NOP a collision call, set a global debug flag, etc.).
+
+### When to use which tool
+
+- **Simple NOP/BLR/value-write**: use `assemble_ppc` to get the hex, \
+  then write a manual 04-line. Example: `assemble_ppc("nop")` → `60000000`.
+- **Multi-instruction hook** (custom logic at a hook site): use \
+  `make_c2_hook(hook_addr, asm)`. This is the right tool for patches like \
+  "add 10.0 to the Y position every frame at this function". The tool \
+  reads the original instruction from the binary and handles everything. \
+  **Never hand-roll 04-write trampolines** — they silently get epilogue, \
+  return-target, and original-instruction handling wrong.
 
 ## Your approach — follow this checklist
 
@@ -128,12 +145,20 @@ addresses over heap addresses. Good targets:
 
 - **Set a global debug flag**: write a byte to a fixed data-segment address \
   that enables a debug mode (noclip, fly, ghost).
-- **NOP a collision call**: replace `bl collision_check` with `60000000` \
-  (PowerPC NOP) to skip collision. This is a CODE address, always stable.
-- **NOP a gravity/physics call**: NOP the function call that applies gravity \
-  so the player floats.
+- **NOP a collision call**: use `assemble_ppc("nop")` to get `60000000`, \
+  then write a 04-line to skip collision. This is a CODE address, always stable.
+- **NOP a gravity/physics call**: same approach — NOP the function call \
+  that applies gravity so the player floats.
 - **Patch a branch**: change a conditional branch to always-taken or \
   never-taken to skip collision/physics code paths.
+- **Inject custom logic via C2 hook**: for complex patches (e.g. "add to Y \
+  position every frame"), use `make_c2_hook(hook_addr, asm)`. Write only \
+  your custom logic — the tool automatically reads the original instruction \
+  from the binary and prepends it, and the C2 codetype handles the return.
+
+**Always use `assemble_ppc` for any PPC instruction** — never hand-compute \
+hex values. Branch displacements and instruction encoding are the #1 source \
+of silent Gecko bugs.
 
 **Avoid**: writing to heap addresses (0x80Axxxxx, 0x80Bxxxxx, 0x817xxxxx) \
 in Gecko codes — these are object pointers that differ per game state.

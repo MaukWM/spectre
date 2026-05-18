@@ -71,25 +71,25 @@ def _pixel_diff_scorer(
             from src.web.sample_builder import _run_dolphin_with_retry
 
             iso_path = project.iso_path.resolve()
-            candidate_img = _run_dolphin_with_retry(
+            outcome = _run_dolphin_with_retry(
                 iso_path, savestate_path, codes, spec.run_seconds,
             )
-            if candidate_img is None:
+            if outcome.image is None:
                 return Score(
                     value=INCORRECT,
                     answer=gecko_text[:200],
-                    explanation="Final Dolphin run produced no frames.",
+                    explanation=f"Final Dolphin run produced no frames. {outcome.crash_detail}",
                 )
 
             # Save result frame to task dir for the web UI.
             from PIL import Image as PILImage
 
-            result_img = PILImage.fromarray(candidate_img)
+            result_img = PILImage.fromarray(outcome.image)
             result_img.save(str(task.result_frame_path), "PNG")
 
             mask_score = score_against_mask(
                 reference=load_image_rgb(task.reference_path),
-                candidate=candidate_img,
+                candidate=outcome.image,
                 mask=load_mask(task.mask_path),
                 hud_min_mean=spec.hud_min_mean,
                 preserve_max_mean=spec.preserve_max_mean,

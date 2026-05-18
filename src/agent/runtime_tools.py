@@ -658,6 +658,7 @@ def apply_gecko_code(
     session_ref: SessionRef,
     iso_path: Path,
     savestate_path: Path,
+    gdb_port: int | None = None,
 ) -> Tool:
     """Build a tool that reboots Dolphin with a Gecko code applied."""
 
@@ -701,6 +702,7 @@ def apply_gecko_code(
             savestate=savestate_path,
             gecko_codes=codes,
             pipe_input=True,
+            gdb_port=gdb_port,
         )
         new_session = session_cm.__enter__()
 
@@ -708,7 +710,19 @@ def apply_gecko_code(
         object.__setattr__(new_session, "_gecko_cm", session_cm)
 
         if not new_session.wait_for_first_frame():
-            return "Error: Dolphin failed to produce frames after reboot."
+            # Check if process crashed
+            rc = new_session.proc.poll()
+            if rc is not None:
+                return (
+                    f"Error: Dolphin crashed (exit code {rc}) after applying Gecko codes — "
+                    f"no frames were rendered. The code likely corrupted execution at the "
+                    f"patched address. Verify the hook site and instruction encoding."
+                )
+            return (
+                "Error: Dolphin produced no frames within 30s after reboot. "
+                "The game may be stuck in an infinite loop or the Gecko code "
+                "broke the render path. Try a different approach."
+            )
 
         session_ref.swap(new_session)
 
